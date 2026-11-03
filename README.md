@@ -4,6 +4,49 @@ Um único script Bash para **Debian e Rocky Linux**, com menus em português, co
 banner ASCII, validação das respostas e confirmação antes de alterar a máquina.
 Instala BIND e Apache e publica um template HTML baixado da Internet.
 
+## Menu principal: aprender, treinar e comprovar
+
+```bash
+bash gs-linux.sh
+```
+
+O script abre este menu antes de fazer qualquer instalação:
+
+```text
+1) Aprender: glossário e exemplos
+2) Orientador: o professor pediu...
+3) Treinar a instalação (demonstração, sem alterações)
+4) Instalar/configurar DNS + Web nesta VM
+5) Comprovar: serviços, portas, DNS, Web e firewall
+6) Salvar relatório de comprovação em texto
+0) Sair
+```
+
+**Começando do zero? Use 1 e leia “DNS” e “Registros”.** O guia explica termos,
+mostra exemplos, sugere como explicar o resultado ao professor e apresenta comandos
+de consulta. Inclui DHCP, rede, firewall, SELinux, serviços, logs e possíveis tarefas.
+O texto está dentro do próprio `gs-linux.sh`: funciona offline, sem instalar pacotes.
+
+Na opção **2**, você pode escrever “o professor pediu algo sobre DHCP”. O orientador
+identifica palavras-chave, pede confirmação do assunto e oferece caminhos para
+planejar a alteração, demonstrar o resultado ou investigar um erro. É um roteiro
+local, não uma IA conectada; não executa o texto digitado nem inventa uma solução
+para qualquer enunciado. **DHCP e as tarefas extras não são instalados pelo guia.**
+
+Também há atalhos:
+
+```bash
+bash gs-linux.sh --learn
+bash gs-linux.sh --tutor
+```
+
+Durante o cadastro de registros DNS, a opção **6** explica A/CNAME/MX/TXT sem perder
+as respostas já preenchidas. Enter retorna ao cadastro.
+
+O terminal usa ciano para perguntas/opções, magenta para seções, azul para
+explicações/comandos, verde para sucesso, amarelo para avisos e vermelho para erros.
+As palavras e rótulos continuam visíveis quando as cores estão desativadas.
+
 ## Comece pela demonstração
 
 Abra um terminal na pasta onde está `gs-linux.sh` e execute:
@@ -26,10 +69,11 @@ Compatibilidade prevista: **Debian 11, 12 e 13; Rocky Linux 8, 9 e 10**.
 Não é um instalador para WSL sem systemd, macOS ou contêineres comuns.
 
 ```bash
-sudo bash gs-linux.sh
+sudo bash gs-linux.sh --install
 ```
 
-Se estiver conectado como `root`, use `bash gs-linux.sh`. Se não tem `sudo` nem
+Ou abra `sudo bash gs-linux.sh` e escolha **4**. Se estiver conectado como `root`,
+use `bash gs-linux.sh --install`. Se não tem `sudo` nem
 acesso a root, precisará da conta administrativa fornecida pelo professor.
 
 O instalador vai:
@@ -94,6 +138,47 @@ novamente o assistente. A reaplicação substitui a configuração gerenciada pe
 lista nova; os registros extras anteriores não são importados automaticamente.
 
 ## Conferir depois de instalar
+
+Para apresentar ao professor, escolha **5** no menu ou use:
+
+```bash
+sudo bash gs-linux.sh --status
+```
+
+O painel mostra o comando, a resposta e o resultado de cada teste, incluindo:
+
+- Sintaxe da configuração BIND/Apache; serviços ativos e habilitados no boot.
+- Portas UDP/53, TCP/53 e TCP/80 e os processos em escuta.
+- IP salvo ainda presente na VM; NS e cada registro salvo; SOA autoritativo por TCP.
+- Resposta HTTP pelo IP e pelo domínio; conteúdo HTML e acesso ao CSS.
+- firewalld: zona da interface e permissões atuais/permanentes; UFW: regras locais.
+- No Rocky, estado e contextos do SELinux.
+
+**Um erro não interrompe os outros testes.** Verde significa que aquele teste
+passou. Vermelho indica falha. Amarelo indica aviso ou algo não verificado, como
+falta de ferramenta, permissão ou configuração salva. Firewall inativo não ganha
+um “OK”. Consultas de regras/contextos marcadas “inspeção” exibem evidências para
+análise; não comprovam, por si, que o tráfego da rede é permitido.
+
+O painel só consulta: não reinicia serviços, altera configurações nem abre portas.
+Sem `sudo`, ele pode mostrar resultados parciais. Seu código de saída é **0** para
+verificações locais completas, **1** se houve falhas e **2** se ficaram avisos ou
+verificações incompletas. O teste a partir de outro computador fica explicitamente
+pendente, mesmo quando todos os testes locais passam.
+
+Para salvar as evidências da demonstração, escolha **6** ou use:
+
+```bash
+sudo bash gs-linux.sh --report
+```
+
+O script informa o caminho de um arquivo `/tmp/gs-linux-relatorio.XXXXXXXX.txt`,
+sem cores, legível apenas pelo usuário que o gerou (root se usou sudo). Leia com
+`sudo less CAMINHO-EXIBIDO` e copie para um local permanente se precisar guardar
+para a entrega: `/tmp` pode ser limpo ao reiniciar. O relatório inclui IPs/domínio
+do laboratório e regras do firewall. Mantém o mesmo código de saída do painel.
+
+Para uma checagem rápida que para na primeira falha, continua disponível:
 
 ```bash
 sudo bash gs-linux.sh --check
@@ -201,10 +286,13 @@ ser implementadas conforme o enunciado; esse ponto de extensão não as adivinha
 
 ```bash
 bash tests/unit.sh
+bash tests/learning-status.sh
 ```
 
 Os testes locais cobrem entrada inválida, conflitos entre registros, escape de TXT,
 caminhos por distribuição, estado salvo, restauração, cancelamento e demonstração.
+Também cobrem guia/orientador sem root, ajuda contextual, entrada literal, falhas
+acumuladas no painel, ferramentas ausentes e exportação de evidências.
 
 `tests/integration.sh` exige um **contêiner descartável**, root, checkout montado
 em `/repo` e `GS_DISPOSABLE_CONTAINER=yes`. Ele instala pacotes e inicia BIND/Apache
@@ -214,6 +302,9 @@ Validação realizada nesta entrega:
 
 - Debian 12: BIND e Apache reais, download do template, consultas A/CNAME/MX/TXT/NS,
   autoridade SOA, DNS UDP/TCP, HTTP por domínio/IP, estado salvo e reaplicação passaram.
+  O novo painel foi exercitado com HTTP funcionando e depois com Apache parado:
+  detectou a falha Web e continuou mostrando os resultados DNS. As consultas de
+  firewalld/UFW foram exercitadas com respostas simuladas, sem alterar regras reais.
 - Rocky 9: a tentativa de instalar os pacotes foi bloqueada pelo proxy deste
   ambiente (`403` para `mirrors.rockylinux.org`). A instalação real ainda não foi validada.
 - Debian 11/13 e Rocky 8/10: caminhos e seleção de plataforma cobertos pelos testes;
