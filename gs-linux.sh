@@ -6,13 +6,15 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.1
+VERSION=1.1.1
 MODE=menu
 DOMAIN='' SERVER_IP='' PLATFORM='' DNS_SERVICE='' WEB_SERVICE=''
 DNS_CONF='' ZONE_FILE='' DNS_GROUP='' WEB_CONF=''
 WEB_ROOT=/var/www/gs-linux
 STATE_DIR=/var/lib/gs-linux
 BACKUP='' WORK='' LOG='' TRANSACTION=0
+DEBIAN_CODENAME='' APT_BACKUP='' APT_REPAIR_PENDING=0
+declare -a APT_PATHS=() APT_EXISTS=()
 DNS_WAS_ACTIVE=0 WEB_WAS_ACTIVE=0 DNS_WAS_ENABLED=0 WEB_WAS_ENABLED=0
 declare -a REC_NAME=() REC_TYPE=() REC_VALUE=() REC_PRIORITY=()
 declare -a SAVED_PATHS=() SAVED_EXISTS=() FW_ADDED=()
@@ -417,6 +419,7 @@ select_platform() {
     local id=$1 version=${2%%.*}
     case "$id:$version" in
         debian:11|debian:12|debian:13)
+            case $version in 11) DEBIAN_CODENAME=bullseye ;; 12) DEBIAN_CODENAME=bookworm ;; 13) DEBIAN_CODENAME=trixie ;; esac
             PLATFORM=debian; DNS_SERVICE=named; WEB_SERVICE=apache2; DNS_GROUP=bind
             DNS_CONF=/etc/bind/named.conf; ZONE_FILE=/var/lib/bind/gs-linux/db.zone
             WEB_CONF=/etc/apache2/sites-enabled/000-000-gs-linux.conf ;;
@@ -588,6 +591,7 @@ wizard() {
         info 'Instalar: BIND e Apache; baixar: template Bare / Start Bootstrap (licença MIT).'
         warn 'A configuração principal do BIND será substituída; o Apache servirá este site como padrão.'
         info 'Arquivos alterados terão backup. Pacotes instalados permanecem se houver falha.'
+        [[ $PLATFORM != debian ]] || info 'APT: fontes de CD/DVD serão desativadas; se faltar fonte online, adicionar repositórios oficiais com backup.'
         info 'Firewall ativo: liberar somente DNS (TCP/UDP 53) e HTTP (TCP 80). SELinux permanece ativo.'
         ask 'S = continuar, R = refazer as respostas, N = sair' N; choice=${REPLY,,}
         case $choice in s|sim) return ;; r) continue ;; *) info 'Cancelado. Nenhuma configuração aplicada.'; exit 0 ;; esac
@@ -611,9 +615,150 @@ run() {
         die "Falha: $label. Consulte $LOG. Não prossiga ignorando esse erro."
     fi
 }
+# Desativa apenas mídia removível. Não muda mirrors, componentes, chaves ou opções
+# das demais fontes. A transformação é preparada em arquivo temporário primeiro.
+filter_apt_media() {
+    local source_file=$1
+    if [[ $source_file != *.sources ]]; then
+        sed -E '/^[[:space:]]*deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?cdrom:/s/^/# GS Linux: mídia desativada: /' "$source_file"
+        return
+    fi
+    awk '
+        function flush(    i,key,value,field,uris,disabled,first,last,enabled,nparts,part,level,ch,token,kept,removed) {
+            uris=""; disabled=0; first=0; last=0; enabled=0; field=""
+            for(i=1;i<=n;i++) {
+                if(lines[i] ~ /^#/) continue
+                if(lines[i] ~ /^[^ \t][^:]*:/) {
+                    key=lines[i]; sub(/:.*/,"",key); field=tolower(key)
+                    value=lines[i]; sub(/^[^:]*:[ \t]*/,"",value)
+                    if(field=="enabled") { enabled=i; if(tolower(value) ~ /^no[ \t]*$/) disabled=1 }
+                    if(field=="uris") { first=i; last=i; uris=value }
+                } else if(field=="uris" && lines[i] ~ /^[ \t]/) {
+                    value=lines[i]; sub(/^[ \t]+/,"",value); uris=uris " " value; last=i
+                }
+            }
+            kept=""; removed=0; level=0; token=""
+            # Nomes de discos podem conter espaços dentro de colchetes.
+            for(i=1;i<=length(uris)+1;i++) {
+                ch=(i<=length(uris) ? substr(uris,i,1) : " ")
+                if(ch=="[") level++
+                if(ch=="]" && level>0) level--
+                if(ch ~ /[ \t]/ && level==0) {
+                    if(token ~ /^cdrom:/) removed=1
+                    else if(token!="") kept=kept (kept!="" ? " " : "") token
+                    token=""
+                } else token=token ch
+            }
+            if(disabled || !removed) { for(i=1;i<=n;i++) print lines[i] }
+            else if(kept=="") {
+                for(i=1;i<=n;i++) { if(i==enabled) print "Enabled: no"; else print lines[i] }
+                if(!enabled) print "Enabled: no"
+            } else {
+                for(i=1;i<=n;i++) {
+                    if(i==first) print "URIs: " kept
+                    else if(i<first || i>last) print lines[i]
+                }
+            }
+            delete lines; n=0
+        }
+        /^[ \t]*$/ { flush(); print; next }
+        { lines[++n]=$0 }
+        END { if(n) flush() }
+    ' "$source_file"
+}
+restore_apt_sources() {
+    local i failed=0
+    for i in "${!APT_PATHS[@]}"; do
+        if [[ ${APT_EXISTS[i]} == 1 ]]; then
+            cp -a -- "$APT_BACKUP/$i" "${APT_PATHS[i]}" || failed=1
+        else rm -f -- "${APT_PATHS[i]}" || failed=1; fi
+    done
+    APT_REPAIR_PENDING=0
+    if (( failed )); then warn "Falha ao restaurar fontes APT. Consulte o backup: $APT_BACKUP"; return 1; fi
+    warn "Fontes APT anteriores restauradas. Backup: $APT_BACKUP"
+}
+prepare_debian_sources() {
+    # Argumentos permitem testar tudo em pastas temporárias, sem tocar em /etc.
+    local apt_dir=${1:-/etc/apt} backups=${2:-/var/backups/gs-linux} codename=${3:-$DEBIAN_CODENAME}
+    local keyring=${4:-/usr/share/keyrings/debian-archive-keyring.gpg}
+    local stage file relative destination i uri_file
+    local -a originals=() staged=()
+    case $codename in bullseye|bookworm|trixie) ;; *) die 'Não foi possível determinar a versão Debian para configurar o APT.' ;; esac
+    APT_PATHS=(); APT_EXISTS=(); APT_REPAIR_PENDING=0
+    stage=$(mktemp -d "$WORK/apt-sources.XXXXXXXX")
+    mkdir "$stage/sources.list.d"
+    : >"$stage/sources.list"
+    for file in "$apt_dir/sources.list" "$apt_dir/sources.list.d/"*.list "$apt_dir/sources.list.d/"*.sources; do
+        [[ -e $file ]] || continue
+        [[ -f $file && -r $file ]] || die "Fonte APT não é um arquivo legível: $file"
+        relative=${file#"$apt_dir/"}
+        filter_apt_media "$file" >"$stage/$relative"
+        if ! cmp -s "$file" "$stage/$relative"; then
+            [[ ! -L $file ]] || die "A fonte de mídia é um link simbólico: $file. Arquivo preservado."
+            originals+=("$file"); staged+=("$stage/$relative")
+        fi
+    done
+    # O próprio APT interpreta os formatos/Enabled/Types. --print-uris não baixa nada.
+    # Esta saída pode conter endereços de mirrors privados: nunca a imprima.
+    uri_file=$stage/targets.txt
+    if ! apt-get -o "Dir::Etc::sourcelist=$stage/sources.list" -o "Dir::Etc::sourceparts=$stage/sources.list.d" --print-uris update >"$uri_file" 2>&1; then
+        die 'O APT não conseguiu interpretar as fontes preparadas. Nenhum arquivo de repositório foi alterado.'
+    fi
+    if ! grep -Eq "^'https?://.*(/binary-[^/]+/Packages|/Packages)[^ ]*' " "$uri_file"; then
+        [[ -s $keyring ]] || die 'Falta o chaveiro oficial Debian (debian-archive-keyring). Não é seguro adicionar fontes sem ele.'
+        destination=$apt_dir/sources.list.d/gs-linux-debian.sources
+        [[ ! -e $destination && ! -L $destination ]] || die "Já existe $destination, mas não fornece pacotes online. Arquivo preservado; confira o conteúdo."
+        cat >"$stage/sources.list.d/gs-linux-debian.sources" <<EOF
+# GS Linux: fontes oficiais para uma instalação sem mirror online.
+# APT verifica a assinatura Debian e os hashes dos pacotes; não usa trusted=yes.
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: $codename $codename-updates
+Components: main
+Signed-By: $keyring
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: $codename-security
+Components: main
+Signed-By: $keyring
+EOF
+        originals+=("$destination"); staged+=("$stage/sources.list.d/gs-linux-debian.sources")
+        info "Não há fonte de pacotes pela Internet. Preparando repositórios oficiais Debian $codename."
+    fi
+    if (( ${#originals[@]} == 0 )); then info 'Fontes APT já possuem acesso online e não exigem reparo de CD/DVD.'; return; fi
+    install -d -m 700 "$backups"
+    APT_BACKUP=$(mktemp -d "$backups/apt-$(date +%Y%m%d-%H%M%S).XXXXXXXX")
+    for i in "${!originals[@]}"; do
+        file=${originals[i]}
+        APT_PATHS+=("$file")
+        if [[ -e $file ]]; then
+            cp -a -- "$file" "$APT_BACKUP/$i"
+            APT_EXISTS+=(1)
+        else APT_EXISTS+=(0); fi
+        printf '%s\t%s\t%s\n' "$i" "${APT_EXISTS[i]}" "$file" >>"$APT_BACKUP/manifest.txt"
+    done
+    APT_REPAIR_PENDING=1
+    info "Preparando APT para usar a Internet. Backup das fontes: $APT_BACKUP"
+    install -d "$apt_dir/sources.list.d"
+    for i in "${!originals[@]}"; do
+        file=${originals[i]}
+        if [[ ${APT_EXISTS[i]} == 1 ]]; then cat "${staged[i]}" >"$file"
+        else install -m 644 "${staged[i]}" "$file"; fi
+    done
+}
 install_packages() {
     if [[ $PLATFORM == debian ]]; then
-        run 'Atualizando a lista de pacotes' apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        prepare_debian_sources /etc/apt /var/backups/gs-linux "$DEBIAN_CODENAME"
+        info 'Atualizando a lista de pacotes (todas as fontes precisam responder corretamente)'
+        if apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update >>"$LOG" 2>&1; then
+            APT_REPAIR_PENDING=0
+            ok 'Lista de pacotes atualizada e assinaturas verificadas pelo APT.'
+        else
+            if (( APT_REPAIR_PENDING )); then restore_apt_sources || true; fi
+            tail -n 15 "$LOG" >&2
+            die "Falha ao atualizar os pacotes. Confira Internet, horário da VM e fontes APT. Log: $LOG"
+        fi
         run 'Instalando BIND, Apache e ferramentas de teste' env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y bind9 bind9-utils dnsutils apache2 curl ca-certificates iproute2
     else
         local -a packages=(bind bind-utils httpd ca-certificates iproute policycoreutils)
@@ -690,6 +835,7 @@ cleanup() {
     local result=$?
     trap - EXIT ERR INT TERM
     set +e
+    if (( APT_REPAIR_PENDING )); then restore_apt_sources; fi
     if (( result != 0 && TRANSACTION )); then rollback >>"$LOG" 2>&1; warn "Instalação interrompida; restauração registrada em $LOG. Backup: $BACKUP"; fi
     [[ -z $WORK ]] || rm -rf -- "$WORK"
     exit "$result"

@@ -86,6 +86,23 @@ O instalador vai:
 6. Liberar DNS e HTTP no firewalld ou UFW, se estiverem ativos.
 7. Ativar os serviços e testar DNS e HTTP de verdade.
 
+No Debian instalado por DVD/ISO, o APT pode ainda apontar para `cdrom:` e apresentar
+“Please use apt-cdrom” ou “does not have a Release file”. A partir da versão **1.1.1**,
+o script prepara as fontes antes da instalação: desativa entradas de mídia em
+`sources.list`, `.list` e `.sources`, preservando mirrors e opções já configurados.
+Se não houver fonte HTTP/HTTPS de pacotes binários ativa, adiciona as fontes oficiais
+da versão instalada (Debian principal, atualizações e segurança, componente `main`).
+Não mistura Debian 11/12/13 nem altera fontes pela Internet existentes.
+
+O backup das fontes fica em `/var/backups/gs-linux/apt-DATA-HORA.XXXXXXXX/`, com um
+manifesto dos caminhos. Se a atualização falhar, ou o processo for interrompido
+antes de validá-la, o assistente tenta restaurar essas fontes. Após uma atualização
+bem-sucedida, o reparo do APT permanece, mesmo se uma etapa posterior falhar.
+As fontes adicionadas usam o transporte HTTP oficial do Debian, permitindo obter
+também `ca-certificates` numa instalação mínima; a assinatura do arquivo Release e
+os hashes dos pacotes continuam obrigatórios, com o chaveiro oficial Debian.
+Nenhuma opção `trusted=yes` ou de aceitação de pacotes sem autenticação é ativada.
+
 **Atenção ao resumo:** a configuração principal do BIND será substituída pelo DNS
 do laboratório. O site passa a ser o padrão do Apache; os arquivos de outros sites
 não são apagados. Use a VM de exercícios, não um servidor com serviços de terceiros.
@@ -243,6 +260,7 @@ Leia a mensagem `[ERRO]`: ela indica a etapa e o caminho do log. Logs ficam em
 | IP não pertence à máquina | Veja `ip -4 addr` e refaça a escolha |
 | Porta 53 ou 80 ocupada | Confira o programa mostrado; não mate serviços sem saber o que são |
 | Erro no download/pacotes | Confira Internet, DNS, repositórios e o log; depois execute novamente |
+| `cdrom:`, `apt-cdrom` ou DVD sem `Release` | Atualize para a versão 1.1.1 ou posterior e execute novamente; o reparo de fontes APT é automático |
 | CNAME/MX sem destino | Primeiro crie o registro A do destino |
 | Teste local passa, outro PC não acessa | Confira rede da VM, firewall externo e configuração DNS do cliente |
 
@@ -287,12 +305,15 @@ ser implementadas conforme o enunciado; esse ponto de extensão não as adivinha
 ```bash
 bash tests/unit.sh
 bash tests/learning-status.sh
+bash tests/apt-sources.sh  # requer apt-get; não usa rede nem altera /etc
 ```
 
 Os testes locais cobrem entrada inválida, conflitos entre registros, escape de TXT,
 caminhos por distribuição, estado salvo, restauração, cancelamento e demonstração.
 Também cobrem guia/orientador sem root, ajuda contextual, entrada literal, falhas
 acumuladas no painel, ferramentas ausentes e exportação de evidências.
+Os testes de APT usam o parser real em diretórios temporários para conferir fontes
+legadas/deb822, preservação de mirrors, assinaturas obrigatórias, backups e repetição.
 
 `tests/integration.sh` exige um **contêiner descartável**, root, checkout montado
 em `/repo` e `GS_DISPOSABLE_CONTAINER=yes`. Ele instala pacotes e inicia BIND/Apache
@@ -307,7 +328,9 @@ Validação realizada nesta entrega:
   firewalld/UFW foram exercitadas com respostas simuladas, sem alterar regras reais.
 - Rocky 9: a tentativa de instalar os pacotes foi bloqueada pelo proxy deste
   ambiente (`403` para `mirrors.rockylinux.org`). A instalação real ainda não foi validada.
-- Debian 11/13 e Rocky 8/10: caminhos e seleção de plataforma cobertos pelos testes;
+- Debian 13: erro de repositório CD/DVD reproduzido em contêiner; o reparo automático
+  permitiu atualizar pacotes e concluir a integração com BIND/Apache reais e o painel.
+- Debian 11 e Rocky 8/10: caminhos e seleção de plataforma cobertos pelos testes;
   instalação completa ainda não executada nessas versões.
 - Os contêineres não validam boot com systemd, SELinux enforcing nem tráfego de
   outra máquina através de um firewall. Faça um ensaio em uma VM igual à da prova.
