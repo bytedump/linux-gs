@@ -6,10 +6,14 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.1.1
+VERSION=1.2.0
 MODE=menu
 DOMAIN='' SERVER_IP='' PLATFORM='' DNS_SERVICE='' WEB_SERVICE=''
-DNS_CONF='' ZONE_FILE='' DNS_GROUP='' WEB_CONF=''
+DNS_CONF='' ZONE_FILE='' DNS_GROUP='' WEB_CONF='' WEB_LINK=''
+DNS_ROLE=primary PRIMARY_IP='' SECONDARY_IP='' WEB_IP='' SERVER_IFACE=''
+REVERSE_NETWORK='' REVERSE_ZONE='' REVERSE_PREFIX='' REVERSE_FILE='' ZONE_DIR=''
+LEGACY_STATE=0
+declare -a LOCAL_IPS=() LOCAL_IFACES=() PTR_IP=() PTR_NAME=()
 WEB_ROOT=/var/www/gs-linux
 STATE_DIR=/var/lib/gs-linux
 BACKUP='' WORK='' LOG='' TRANSACTION=0
@@ -79,7 +83,7 @@ ask() {
 }
 # O guia faz parte deste arquivo: continua disponível copiando apenas o .sh.
 lesson() {
-    local topic=$1 domain=${DOMAIN:-empresa.test} server=${SERVER_IP:-192.168.56.10}
+    local topic=$1 domain=${DOMAIN:-aluno.fiap} server=${SERVER_IP:-192.168.56.10}
     case $topic in
         dns)
             heading 'DNS e BIND — encontrar uma máquina pelo nome'
@@ -87,7 +91,7 @@ lesson() {
             cat <<EOF
 Exemplo: você consulta $domain e o DNS responde $server.
 BIND é o programa que responde às consultas DNS. Seu serviço se chama named.
-Uma ZONA é o conjunto de registros de um domínio. DOMÍNIO é o nome, como empresa.test.
+Uma ZONA é o conjunto de registros de um domínio. DOMÍNIO é o nome, como aluno.fiap.
 Este script cria um DNS AUTORITATIVO: ele conhece a zona que você cadastrou.
 Não é um resolvedor geral da Internet; a recursão está desligada.
 
@@ -96,6 +100,25 @@ PARA MOSTRAR AO PROFESSOR:
 O @ indica qual DNS consultar. Procure status: NOERROR e a seção ANSWER.
 O sinalizador aa significa resposta autoritativa. NXDOMAIN significa nome inexistente.
 Timeout significa que a resposta não chegou; pode ser serviço, IP, rede ou firewall.
+
+NA ATIVIDADE DO PROFESSOR:
+  Primário (master): cria os registros e envia as zonas ao secundário autorizado.
+  Secundário (slave): recebe cópias; não edite os arquivos recebidos nessa VM.
+  Primeiro instale o primário e informe o IP reservado para a segunda VM.
+  Depois, na segunda VM, escolha Secundário e informe o IP do primário.
+  Use o MESMO domínio e a MESMA rede /24 nas duas instalações.
+  No perfil de duas VMs, www aponta para a segunda VM; intranet é apelido de www.
+
+Zona direta: nome → IP. Zona reversa: IP → nome, usando registros PTR.
+Exemplo: 192.168.56.0/24 → 56.168.192.in-addr.arpa.
+O script gera PTRs dos registros A que pertencem à rede /24 escolhida.
+Um A externo, como webmail → 10.200.200.200, fica fora dessa zona reversa.
+
+PARA PROVAR A REPLICAÇÃO:
+  Consulte o SOA nos dois IPs: os seriais devem coincidir.
+  Acrescente webmail A 10.200.200.200 no primário, mantendo os outros registros.
+  Reaplicar aumenta o serial automaticamente; consulte webmail no secundário.
+  O painel 5 mostra SOAs, arquivos recebidos, nslookup e logs do BIND.
 
 EXPLICAÇÃO EM UMA FRASE:
   "Configurei o BIND para responder pela zona $domain e consultei esse DNS diretamente."
@@ -106,13 +129,14 @@ EOF
             cat <<EOF
 A     Nome → IPv4. Ex.: loja.$domain → $server.
       Use quando o professor pedir: "aponte este nome para este IP".
-CNAME Apelido → outro nome. Ex.: www.$domain → $domain.
+CNAME Apelido → outro nome. Ex.: intranet.$domain → www.$domain.
       Não recebe IP. Neste script, o destino precisa ter um A na mesma zona.
 MX    Domínio → nome do servidor de e-mail. Ex.: $domain → mail.$domain.
       Crie antes o A de mail. Prioridade 10 é preferida a 20. MX não instala e-mail.
 TXT   Texto associado a um nome. Ex.: "Trabalho da GS". Não aponta para uma máquina.
 NS    Nome do servidor responsável pela zona. Aqui: ns1.$domain.
 SOA   Informações de controle da zona. Inclui o SERIAL, que identifica sua versão.
+PTR   IPv4 → nome. É gerado automaticamente para cada A dentro da rede /24 escolhida.
 TTL   Tempo em segundos pelo qual uma resposta pode ficar em cache.
 @     Dentro do arquivo da zona: o próprio domínio. No dig: o servidor consultado.
 
@@ -120,15 +144,28 @@ No menu, digite loja: o script completa .$domain para você.
 Um nome com CNAME não pode ter também A, MX ou TXT. O script impede esse conflito.
 O ponto final em mail.$domain. indica um nome completo no arquivo da zona.
 Sem ele, o BIND pode acrescentar o domínio de novo. O script coloca o ponto.
+www já é A. Use a opção 7 para mudar seu IP; intranet continuará apontando para www.
+Você pode remover os registros da base; ns1 é protegido porque sustenta SOA e NS.
+Para mudar o tipo, remova o registro e cadastre outro; remova antes seus dependentes.
+
+SOA DA ATIVIDADE (valores em segundos):
+  SERIAL: AAAAMMDDnn, por exemplo 2026110400; cada reaplicação aumenta o contador.
+  REFRESH 28800: intervalo normal para o secundário procurar atualizações (8 horas).
+  RETRY 14400: espera para tentar novamente se a consulta falhar (4 horas).
+  EXPIRE 86400: limite sem atualizar antes de deixar de servir a cópia (1 dia).
+  MINIMUM 600: tempo de cache negativo, como resposta de nome inexistente (10 minutos).
+  NOTIFY avisa o secundário de alterações; ele não precisa esperar o REFRESH.
 
 PARA MOSTRAR:
   dig @$server loja.$domain A
-  dig @$server www.$domain CNAME
+  dig @$server www.$domain A
+  dig @$server intranet.$domain CNAME
+  dig @$server -x $server
   dig @$server $domain MX
   dig @$server $domain TXT
 
-AAAA é para IPv6, PTR para resolução reversa e SRV para descoberta de serviços.
-Esses três tipos e a zona reversa ainda não são configurados por este script.
+AAAA é para IPv6 e SRV para descoberta de serviços. Esses dois não estão implementados.
+Zona reversa neste perfil exige /24. Não atende delegação reversa de outros prefixos.
 EOF
             ;;
         web)
@@ -175,6 +212,13 @@ CONSULTAS QUE NÃO ALTERAM A REDE:
 ping testa resposta ICMP. Um ping funcionando NÃO prova que DNS ou HTTP funcionam.
 Uma porta em escuta NÃO prova que outro computador consegue chegar até ela.
 Se o IP da VM mudar por DHCP, a configuração DNS salva pode ficar desatualizada.
+
+VIRTUALBOX COM DUAS PLACAS:
+  Host-Only: rede compartilhada pelas VMs do laboratório, normalmente 192.168.56.x.
+  NAT: saída para Internet, frequentemente 10.0.2.15. Duas VMs NAT podem exibir esse
+  mesmo IP sem conseguirem conversar por ele. Escolha o IP Host-Only no assistente.
+  A lista prioriza 192.168.56.x; confira os endereços do enunciado antes de aceitar.
+  Configure antes o IP fixo na interface Host-Only. O script não altera a rede da VM.
 EOF
             ;;
         dhcp)
@@ -270,11 +314,12 @@ Liberar acesso ao site         Firewall na interface correta        Regra + test
 Iniciar após reiniciar         systemctl enable do serviço          is-enabled + teste após boot
 IP automático para clientes    Planejar DHCP em rede isolada        Concessão real no cliente
 Outro domínio/site             Nova zona + novo VirtualHost         dig e curl dos dois sites
-Resolução reversa              Zona reversa + PTR                   dig -x IP @servidor
+Resolução reversa /24          Automática para os A locais          dig -x IP @servidor
+DNS secundário                Papel 2 na segunda VM                SOAs iguais + consulta nova
 Backup agendado                 Script de backup + cron/timer        Arquivo gerado + restauração
 Usuários/permissões             id, grupos, ls -l; menor privilégio   Teste como aquele usuário
 
-As últimas tarefas exigem implementação adicional conforme o enunciado.
+DHCP, outro site, backup agendado e gestão de usuários exigem implementação adicional.
 Para qualquer tarefa: anote o pedido → planeje → faça backup → altere → valide → teste.
 Leia extra_tasks no código: é o ponto reservado às chamadas das funções da prova.
 Não use chmod 777 como solução geral e não teste restauração por cima da única cópia.
@@ -285,8 +330,8 @@ EOF
 learning_menu() {
     while :; do
         heading 'APRENDER — escolha o que ainda não entendeu'
-        menu_item 1 'DNS, domínio, zona e BIND'
-        menu_item 2 'A, CNAME, MX, TXT, NS, SOA e TTL'
+        menu_item 1 'DNS, BIND, zona reversa e primário/secundário'
+        menu_item 2 'A, CNAME, MX, TXT, PTR, NS, SOA e TTL'
         menu_item 3 'Apache, HTTP, template e VirtualHost'
         menu_item 4 'IP, máscara, gateway e portas'
         menu_item 5 'DHCP: o que é e o que o professor pode pedir'
@@ -313,7 +358,8 @@ tutor_menu() {
         question=${REPLY,,}; [[ $question == 0 ]] && return
         case $question in
             *dhcp*|*concess*|*ip*autom*tic*|*endere*autom*tic*) topic=dhcp ;;
-            *cname*|*registro*|*apelido*|*mx*|*txt*) topic=records ;;
+            *revers*|*secund*|*slave*|*prim*rio*|*master*|*transfer*) topic=dns ;;
+            *cname*|*registro*|*apelido*|*mx*|*txt*|*soa*|*serial*|*ptr*) topic=records ;;
             *firewall*|*porta*|*selinux*|*ufw*) topic=firewall ;;
             *apache*|*http*|*site*|*template*|*web*) topic=web ;;
             *dns*|*bind*|*dom*nio*|*zona*) topic=dns ;;
@@ -422,11 +468,12 @@ select_platform() {
             case $version in 11) DEBIAN_CODENAME=bullseye ;; 12) DEBIAN_CODENAME=bookworm ;; 13) DEBIAN_CODENAME=trixie ;; esac
             PLATFORM=debian; DNS_SERVICE=named; WEB_SERVICE=apache2; DNS_GROUP=bind
             DNS_CONF=/etc/bind/named.conf; ZONE_FILE=/var/lib/bind/gs-linux/db.zone
-            WEB_CONF=/etc/apache2/sites-enabled/000-000-gs-linux.conf ;;
+            WEB_CONF=/etc/apache2/sites-available/000-000-gs-linux.conf
+            WEB_LINK=/etc/apache2/sites-enabled/000-000-gs-linux.conf ;;
         rocky:8|rocky:9|rocky:10)
             PLATFORM=rocky; DNS_SERVICE=named; WEB_SERVICE=httpd; DNS_GROUP=named
             DNS_CONF=/etc/named.conf; ZONE_FILE=/var/named/gs-linux/db.zone
-            WEB_CONF=/etc/httpd/conf.d/00-gs-linux.conf ;;
+            WEB_CONF=/etc/httpd/conf.d/00-gs-linux.conf; WEB_LINK='' ;;
         *) return 1 ;;
     esac
 }
@@ -452,10 +499,82 @@ detect_ip() {
     fi
     if valid_ipv4 "$candidate"; then printf '%s' "$candidate"; fi
 }
-ip_is_local() { ip -o -4 addr show | awk '{split($4,a,"/");print a[1]}' | grep -Fxq -- "$SERVER_IP"; }
+ip_is_local() { ip -o -4 addr show | awk -v wanted="$SERVER_IP" '{split($4,a,"/");if(a[1]==wanted)found=1} END{exit !found}'; }
+valid_server_ip() {
+    valid_ipv4 "$1" && [[ $1 != 127.* && $1 != 0.* ]] && (( ${1%%.*} < 224 )) && [[ ${1##*.} != 0 && ${1##*.} != 255 ]]
+}
+choose_server_ip() {
+    local iface cidr addr choice suggested='' i addresses=''
+    LOCAL_IPS=(); LOCAL_IFACES=(); SERVER_IFACE=''
+    if command -v ip >/dev/null; then
+        addresses=$(ip -o -4 addr show scope global 2>/dev/null) || warn 'Não foi possível listar as interfaces. Digite o IP manualmente.'
+        while read -r iface cidr; do
+            addr=${cidr%/*}
+            valid_server_ip "$addr" || continue
+            LOCAL_IPS+=("$addr"); LOCAL_IFACES+=("$iface")
+        done < <(awk 'NF {print $2,$4}' <<<"$addresses")
+    fi
+    heading 'ESCOLHA A INTERFACE DO LABORATÓRIO'
+    explain 'Na atividade: Host-Only em 192.168.56.x para as VMs conversarem; NAT para Internet.'
+    for i in "${!LOCAL_IPS[@]}"; do
+        menu_item "$((i+1))" "${LOCAL_IFACES[i]} — ${LOCAL_IPS[i]}"
+        if [[ ${LOCAL_IPS[i]} == 192.168.56.* && -z $suggested ]]; then suggested=$((i+1)); fi
+    done
+    [[ -n $suggested ]] || suggested=${LOCAL_IPS[0]:-$(detect_ip)}
+    [[ -n $suggested || $MODE != demo ]] || suggested=192.168.56.10
+    while :; do
+        ask 'Escolha o número da interface OU digite o IPv4 desta VM' "$suggested"
+        choice=$REPLY
+        if [[ $choice =~ ^[0-9]{1,3}$ ]] && (( 10#$choice >= 1 && 10#$choice <= ${#LOCAL_IPS[@]} )); then
+            i=$((10#$choice-1)); SERVER_IP=${LOCAL_IPS[i]}; SERVER_IFACE=${LOCAL_IFACES[i]}
+        else SERVER_IP=$choice; fi
+        if valid_server_ip "$SERVER_IP"; then break; fi
+        warn 'Informe o IP da interface, como 192.168.56.10; não use endereço de rede, broadcast ou loopback.'
+    done
+    if [[ -z $SERVER_IFACE ]]; then
+        for i in "${!LOCAL_IPS[@]}"; do [[ ${LOCAL_IPS[i]} != "$SERVER_IP" ]] || SERVER_IFACE=${LOCAL_IFACES[i]}; done
+    fi
+    [[ $SERVER_IP != 10.0.2.* ]] || warn 'Esse endereço costuma ser NAT no VirtualBox. Para a atividade entre VMs, confira o adaptador Host-Only.'
+    warn 'O IP deve estar configurado como fixo na VM. O assistente não altera adaptadores do VirtualBox nem a rede do sistema.'
+}
+set_reverse_network() {
+    local network=$1 a b c d
+    [[ $network == */24 ]] || return 1
+    valid_ipv4 "${network%/*}" || return 1
+    IFS=. read -r a b c d <<<"${network%/*}"
+    [[ $d == 0 ]] || return 1
+    REVERSE_NETWORK=$network; REVERSE_PREFIX=$a.$b.$c; REVERSE_ZONE=$c.$b.$a.in-addr.arpa
+}
+set_zone_paths() {
+    if [[ $PLATFORM == debian ]]; then
+        if [[ $DNS_ROLE == secondary ]]; then ZONE_DIR=/var/cache/bind/gs-linux
+        else ZONE_DIR=/var/lib/bind/gs-linux; fi
+    else
+        if [[ $DNS_ROLE == secondary ]]; then ZONE_DIR=/var/named/slaves/gs-linux
+        else ZONE_DIR=/var/named/gs-linux; fi
+    fi
+    ZONE_FILE=$ZONE_DIR/$DOMAIN.zone
+    REVERSE_FILE=$ZONE_DIR/$REVERSE_ZONE
+    if (( LEGACY_STATE )); then ZONE_FILE=$ZONE_DIR/db.zone; REVERSE_FILE=''; fi
+}
+build_ptr_records() {
+    local i ip name
+    PTR_IP=(); PTR_NAME=()
+    [[ -n $REVERSE_PREFIX ]] || return 0
+    for i in "${!REC_NAME[@]}"; do
+        [[ ${REC_TYPE[i]} == A ]] || continue
+        ip=${REC_VALUE[i]}
+        [[ ${ip%.*} == "$REVERSE_PREFIX" ]] || continue
+        name=${REC_NAME[i]}; [[ $name == @ ]] && name=$DOMAIN || name=$name.$DOMAIN
+        PTR_IP+=("$ip"); PTR_NAME+=("$name.")
+    done
+}
 
 add_record() {
     local name=$1 type=$2 value=$3 priority=${4:-} i
+    if [[ $name == ns1 && ( $type != A || $value != "${PRIMARY_IP:-$SERVER_IP}" ) ]]; then
+        warn 'ns1 deve continuar apontando para o IP do primário.'; return 1
+    fi
     for i in "${!REC_NAME[@]}"; do
         [[ ${REC_NAME[i]} == "$name" ]] || continue
         if [[ ${REC_TYPE[i]} == "$type" && ${REC_VALUE[i]} == "$value" && ${REC_PRIORITY[i]} == "$priority" ]]; then
@@ -482,8 +601,9 @@ add_record() {
     REC_NAME+=("$name"); REC_TYPE+=("$type"); REC_VALUE+=("$value"); REC_PRIORITY+=("$priority")
 }
 base_records() {
-    REC_NAME=(@ ns1 www); REC_TYPE=(A A CNAME)
-    REC_VALUE=("$SERVER_IP" "$SERVER_IP" "$DOMAIN"); REC_PRIORITY=('' '' '')
+    PRIMARY_IP=${PRIMARY_IP:-$SERVER_IP}; WEB_IP=${WEB_IP:-${SECONDARY_IP:-$SERVER_IP}}
+    REC_NAME=(@ ns1 www intranet); REC_TYPE=(A A A CNAME)
+    REC_VALUE=("$PRIMARY_IP" "$PRIMARY_IP" "$WEB_IP" "www.$DOMAIN"); REC_PRIORITY=('' '' '' '')
 }
 show_records() {
     local i
@@ -491,32 +611,33 @@ show_records() {
     for i in "${!REC_NAME[@]}"; do
         printf '%-4s %-22s %-7s %s %s\n' "$((i+1))" "${REC_NAME[i]}" "${REC_TYPE[i]}" "${REC_PRIORITY[i]}" "${REC_VALUE[i]}"
     done
-    info '1, 2 e 3 são a base fixa: domínio, servidor DNS (ns1) e site (www).'
+    info 'Você pode editar valores ou remover registros. ns1 acompanha o IP do primário e é necessário ao SOA/NS.'
 }
 prompt_record() {
-    local type=$1 name value priority=''
-    while :; do
+    local type=$1 name=${2:-} value priority='' default_value=${3:-}
+    while [[ -z $name ]]; do
         ask 'Nome do registro (ex.: loja, mail ou @ para o domínio principal)'
         name=${REPLY,,}; name=${name%.}
         [[ $name == "$DOMAIN" ]] && name=@
         [[ $name == *."$DOMAIN" ]] && name=${name%."$DOMAIN"}
         if valid_owner "$name" "$type"; then break; fi
         warn 'Nome inválido. Use letras sem acento, números e hífens; TXT também aceita _.'
+        name=''
     done
     case $type in
         A)
             while :; do
-                ask 'IPv4 de destino (ex.: 192.168.56.20)' "$SERVER_IP"; value=$REPLY
+                ask 'IPv4 de destino (ex.: 192.168.56.20)' "${default_value:-$SERVER_IP}"; value=$REPLY
                 if valid_ipv4 "$value"; then break; fi
                 warn 'IPv4 inválido. Cada parte deve ir de 0 a 255, sem zeros à esquerda.'
             done ;;
         CNAME|MX)
-            info 'O destino precisa ter um registro A nesta zona. Ex.: mail.empresa.test.'
+            info "O destino precisa ter um registro A nesta zona. Ex.: www.$DOMAIN."
             [[ $type == MX ]] && warn 'MX só publica o endereço: não instala um servidor de e-mail.'
             while :; do
-                ask 'Nome completo de destino' "$DOMAIN"; value=${REPLY,,}; value=${value%.}
+                ask 'Nome completo de destino' "${default_value:-$DOMAIN}"; value=${REPLY,,}; value=${value%.}
                 if valid_domain "$value"; then break; fi
-                warn 'Use um nome completo, como mail.empresa.test, nunca um IP.'
+                warn "Use um nome completo, como www.$DOMAIN, nunca um IP."
             done
             if [[ $type == MX ]]; then
                 while :; do
@@ -527,21 +648,22 @@ prompt_record() {
             fi ;;
         TXT)
             while :; do
-                ask 'Texto (até 200 caracteres; não precisa colocar aspas)'; value=$REPLY
+                ask 'Texto (até 200 caracteres; não precisa colocar aspas)' "$default_value"; value=$REPLY
                 if LC_ALL=C valid_txt "$value"; then break; fi
                 warn 'Use de 1 a 200 caracteres visíveis, sem acentos ou quebras de linha.'
             done ;;
     esac
-    if add_record "$name" "$type" "$value" "$priority"; then ok 'Registro adicionado.'; fi
+    if add_record "$name" "$type" "$value" "$priority"; then ok 'Registro adicionado.'; else return 1; fi
 }
 remove_record() {
     local index i target
     show_records
-    ask 'Número do registro extra a remover (0 = voltar)' 0
+    ask 'Número do registro a remover (0 = voltar)' 0
     [[ $REPLY =~ ^[0-9]{1,5}$ ]] || { warn 'Digite um número da lista.'; return; }
     index=$((10#$REPLY - 1))
     (( index == -1 )) && return 0
-    if (( index < 3 || index >= ${#REC_NAME[@]} )); then warn 'Escolha um registro extra, a partir de 4.'; return; fi
+    if (( index < 0 || index >= ${#REC_NAME[@]} )); then warn 'Escolha um número da lista.'; return; fi
+    if [[ ${REC_NAME[index]} == ns1 ]]; then warn 'ns1 identifica o primário no SOA/NS. Para trocar seu IP, refaça o assistente.'; return; fi
     target=${REC_NAME[index]}; [[ $target == @ ]] && target=$DOMAIN || target=$target.$DOMAIN
     for i in "${!REC_NAME[@]}"; do
         if [[ ( ${REC_TYPE[i]} == CNAME || ${REC_TYPE[i]} == MX ) && ${REC_VALUE[i]} == "$target" ]]; then
@@ -552,42 +674,99 @@ remove_record() {
     REC_NAME=("${REC_NAME[@]}"); REC_TYPE=("${REC_TYPE[@]}"); REC_VALUE=("${REC_VALUE[@]}"); REC_PRIORITY=("${REC_PRIORITY[@]}")
     ok 'Registro removido.'
 }
+edit_record() {
+    local index name type value
+    local -a old_names=("${REC_NAME[@]}") old_types=("${REC_TYPE[@]}") old_values=("${REC_VALUE[@]}") old_priorities=("${REC_PRIORITY[@]}")
+    show_records
+    ask 'Número do registro cujo valor deseja editar (0 = voltar)' 0
+    [[ $REPLY =~ ^[0-9]{1,5}$ ]] || { warn 'Digite um número da lista.'; return; }
+    index=$((10#$REPLY-1))
+    (( index == -1 )) && return 0
+    if (( index < 0 || index >= ${#REC_NAME[@]} )); then warn 'Escolha um número da lista.'; return; fi
+    name=${REC_NAME[index]}; type=${REC_TYPE[index]}; value=${REC_VALUE[index]}
+    if [[ $name == ns1 ]]; then warn 'Para trocar o IP de ns1, refaça o assistente com o IP correto do primário.'; return; fi
+    unset 'REC_NAME[index]' 'REC_TYPE[index]' 'REC_VALUE[index]' 'REC_PRIORITY[index]'
+    REC_NAME=("${REC_NAME[@]}"); REC_TYPE=("${REC_TYPE[@]}"); REC_VALUE=("${REC_VALUE[@]}"); REC_PRIORITY=("${REC_PRIORITY[@]}")
+    if ! prompt_record "$type" "$name" "$value"; then
+        REC_NAME=("${old_names[@]}"); REC_TYPE=("${old_types[@]}"); REC_VALUE=("${old_values[@]}"); REC_PRIORITY=("${old_priorities[@]}")
+        warn 'Edição inválida. O registro anterior foi preservado.'
+    fi
+}
 wizard() {
-    local suggested choice
-    suggested=$(detect_ip)
-    [[ $MODE == demo && -z $suggested ]] && suggested=192.168.56.10
+    local suggested choice i
     while :; do
+        LEGACY_STATE=0; PRIMARY_IP=''; SECONDARY_IP=''; WEB_IP=''
         while :; do
-            ask 'Domínio do laboratório (sem http://; .test é próprio para exercícios)' empresa.test
+            ask 'Domínio da atividade (seu nome + .fiap, sem http://)' nome.fiap
             DOMAIN=${REPLY,,}; DOMAIN=${DOMAIN%.}
             if valid_domain "$DOMAIN" && [[ $DOMAIN != *.local ]]; then break; fi
-            warn 'Exemplo válido: empresa.test. Evite .local, reservado para descoberta de rede.'
+            warn 'Exemplo válido: aluno.fiap. Evite .local, reservado para descoberta de rede.'
         done
         while :; do
-            ask 'IPv4 DESTA máquina, acessível pelos colegas na rede' "$suggested"; SERVER_IP=$REPLY
-            if valid_ipv4 "$SERVER_IP" && [[ $SERVER_IP != 127.* && $SERVER_IP != 0.* ]] && (( ${SERVER_IP%%.*} < 224 )); then break; fi
-            warn 'Informe o IP da interface de rede, não 127.0.0.1, multicast ou 0.0.0.0.'
+            menu_item 1 'Primário: criar e editar as zonas (primeira VM)'
+            menu_item 2 'Secundário: receber as zonas do primário (segunda VM)'
+            ask 'Papel DESTA VM' 1
+            case $REPLY in 1) DNS_ROLE=primary; break ;; 2) DNS_ROLE=secondary; break ;; *) warn 'Escolha 1 ou 2.' ;; esac
         done
-        warn 'Mantenha esse IP estável na VM. Se o DHCP mudar o IP, execute o assistente novamente.'
-        base_records
+        choose_server_ip
+        if [[ $DNS_ROLE == primary ]]; then
+            PRIMARY_IP=$SERVER_IP
+            suggested=${SERVER_IP%.*}.20
+            [[ $suggested != "$SERVER_IP" ]] || suggested=${SERVER_IP%.*}.21
+            while :; do
+                ask 'IP reservado ao secundário (pode ser criado depois; 0 = usar só esta VM)' "$suggested"
+                [[ $REPLY != 0 ]] || break
+                if valid_server_ip "$REPLY" && [[ $REPLY != "$SERVER_IP" ]]; then SECONDARY_IP=$REPLY; break; fi
+                warn 'Informe outro IP válido para a segunda VM, ou 0.'
+            done
+            WEB_IP=${SECONDARY_IP:-$SERVER_IP}
+            base_records
+        else
+            SECONDARY_IP=$SERVER_IP
+            while :; do
+                ask 'IP do servidor PRIMÁRIO que já foi configurado' "${SERVER_IP%.*}.10"
+                if valid_server_ip "$REPLY" && [[ $REPLY != "$SERVER_IP" ]]; then PRIMARY_IP=$REPLY; break; fi
+                warn 'O primário precisa ter outro IP válido.'
+            done
+            WEB_IP=$SERVER_IP
+            REC_NAME=(); REC_TYPE=(); REC_VALUE=(); REC_PRIORITY=()
+            explain 'No secundário, os registros vêm da transferência. Edite-os sempre no primário.'
+        fi
         while :; do
+            ask 'Rede /24 da zona reversa (use a mesma nas duas VMs)' "${PRIMARY_IP%.*}.0/24"
+            if set_reverse_network "$REPLY"; then break; fi
+            warn 'Este perfil atende redes /24, como 192.168.56.0/24. Informe o endereço terminado em .0/24.'
+        done
+        set_zone_paths
+        while [[ $DNS_ROLE == primary ]]; do
             show_records
             menu_item 1 'A — nome → IPv4'
             menu_item 2 'CNAME — apelido → outro nome'
             menu_item 3 'MX — servidor de e-mail'
             menu_item 4 'TXT — texto'
-            menu_item 5 'Remover registro extra'
+            menu_item 5 'Remover registro'
             menu_item 6 'Não entendi os registros: abrir explicação'
+            menu_item 7 'Editar o valor de um registro existente'
             menu_item 0 'Concluir registros'
             ask 'Escolha uma opção' 0
             case $REPLY in
-                1) prompt_record A ;; 2) prompt_record CNAME ;; 3) prompt_record MX ;; 4) prompt_record TXT ;;
-                5) remove_record ;; 6) lesson records; pause_reading ;; 0) break ;; *) warn 'Escolha uma opção de 0 a 6.' ;;
+                1) prompt_record A || true ;; 2) prompt_record CNAME || true ;; 3) prompt_record MX || true ;; 4) prompt_record TXT || true ;;
+                5) remove_record ;; 6) lesson records; pause_reading ;; 7) edit_record ;; 0) break ;; *) warn 'Escolha uma opção de 0 a 7.' ;;
             esac
         done
         printf '\n%sRESUMO ANTES DE CONTINUAR%s\n' "$BOLD" "$RESET"
         info "Domínio: $DOMAIN | IP: $SERVER_IP | Sistema: $PLATFORM"
-        show_records
+        info "Papel: $DNS_ROLE | Primário: $PRIMARY_IP | Secundário: ${SECONDARY_IP:-nenhum}"
+        info "Zona reversa: $REVERSE_ZONE | SOA: 28800 / 14400 / 86400 / 600 | Serial: AAAAMMDDnn"
+        if [[ $DNS_ROLE == primary ]]; then
+            show_records
+            info 'PTRs serão criados para cada registro A dentro da rede /24 escolhida; CNAME não recebe PTR.'
+            for i in "${!REC_NAME[@]}"; do
+                if [[ ${REC_TYPE[i]} == A && ${REC_VALUE[i]%.*} != "$REVERSE_PREFIX" ]]; then
+                    warn "${REC_NAME[i]} (${REC_VALUE[i]}) está fora de $REVERSE_NETWORK e não receberá PTR nesta zona."
+                fi
+            done
+        else info 'As zonas direta e reversa serão recebidas do primário. Ele deve autorizar o IP desta VM.'; fi
         info 'Instalar: BIND e Apache; baixar: template Bare / Start Bootstrap (licença MIT).'
         warn 'A configuração principal do BIND será substituída; o Apache servirá este site como padrão.'
         info 'Arquivos alterados terão backup. Pacotes instalados permanecem se houver falha.'
@@ -781,9 +960,9 @@ check_ports() {
 }
 backup_path() {
     local path=$1
-    [[ ! -L $path ]] || die "Arquivo gerenciado é um link simbólico: $path. Revise-o antes de continuar."
+    [[ ! -L $path || ${2:-} == link ]] || die "Arquivo gerenciado é um link simbólico: $path. Revise-o antes de continuar."
     SAVED_PATHS+=("$path")
-    if [[ -e $path ]]; then
+    if [[ -e $path || -L $path ]]; then
         SAVED_EXISTS+=(1)
         mkdir -p -- "$BACKUP/files$(dirname "$path")"
         cp -a -- "$path" "$BACKUP/files$path"
@@ -804,7 +983,8 @@ begin_transaction() {
     systemctl is-enabled --quiet "$DNS_SERVICE" && DNS_WAS_ENABLED=1
     systemctl is-enabled --quiet "$WEB_SERVICE" && WEB_WAS_ENABLED=1
     # Só começamos a alterar arquivos depois de concluir todos os backups.
-    backup_path "$DNS_CONF"; backup_path "$ZONE_FILE"; backup_path "$WEB_CONF"
+    backup_path "$DNS_CONF"; backup_path "$ZONE_DIR"; backup_path "$WEB_CONF"
+    [[ -z $WEB_LINK ]] || backup_path "$WEB_LINK" link
     backup_path "$WEB_ROOT"; backup_path "$STATE_DIR/state"
     TRANSACTION=1
 }
@@ -855,19 +1035,32 @@ download_template() {
     sed -i "s|https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js|js/bootstrap.bundle.min.js|;s|A Bootstrap 5 Starter Template|GS Linux: $DOMAIN|;s|A complete project boilerplate built with Bootstrap|Servidor DNS e Apache configurados|" "$WORK/site/index.html"
     printf '%s\n' "$DOMAIN" >"$WORK/site/gs-health.txt"
 }
-render_zone() {
-    local output=$1 serial=$2 i value
-    cat >"$output" <<EOF
-; Gerado pelo GS Linux. Edite o script ou execute o assistente novamente.
-\$TTL 300
+next_zone_serial() {
+    local previous=${1:-0} today=${2:-$(date +%Y%m%d)} floor
+    [[ $today =~ ^[0-9]{8}$ && $previous =~ ^[0-9]{1,10}$ ]] || die 'Data/serial inválidos.'
+    floor=$((10#${today}00))
+    previous=$((10#$previous))
+    (( floor+99 < 4294967295 && previous < 4294967295 )) || die 'Serial fora do limite de 32 bits do DNS.'
+    if (( previous < floor )); then printf '%s' "$floor"
+    elif (( previous < floor+99 )); then printf '%s' "$((previous+1))"
+    else die 'Serial futuro ou limite de 100 versões no dia atingido. Confira o relógio/serial antes de publicar.'; fi
+}
+render_soa() {
+    cat <<EOF
+; Gerado pelo GS Linux — atividade FIAP.
+\$TTL 600
 @ IN SOA ns1.$DOMAIN. hostmaster.$DOMAIN. (
-    $serial ; serial: aumenta a cada execução
-    3600       ; refresh
-    900        ; retry
-    604800     ; expire
-    300 )      ; negative cache
+    $1 ; serial: AAAAMMDDnn
+    28800      ; refresh: 8 horas
+    14400      ; retry: 4 horas
+    86400      ; expire: 1 dia
+    600 )      ; negative cache: 10 minutos
 @ IN NS ns1.$DOMAIN.
 EOF
+}
+render_zone() {
+    local output=$1 serial=$2 i value
+    render_soa "$serial" >"$output"
     for i in "${!REC_NAME[@]}"; do
         value=${REC_VALUE[i]}
         case ${REC_TYPE[i]} in
@@ -878,11 +1071,32 @@ EOF
         esac
     done >>"$output"
 }
+render_reverse() {
+    local output=$1 serial=$2 i
+    render_soa "$serial" >"$output"
+    build_ptr_records
+    for i in "${!PTR_IP[@]}"; do
+        printf '%s IN PTR %s\n' "${PTR_IP[i]##*.}" "${PTR_NAME[i]}"
+    done >>"$output"
+}
+render_zone_declaration() {
+    local zone=$1 file=$2
+    printf 'zone "%s" IN {\n' "$zone"
+    if [[ $DNS_ROLE == secondary ]]; then
+        printf '    type slave;\n    masters { %s; };\n    file "%s";\n    notify no;\n' "$PRIMARY_IP" "$file"
+    else
+        printf '    type master;\n    file "%s";\n    allow-update { none; };\n' "$file"
+        if [[ -n $SECONDARY_IP ]]; then
+            printf '    allow-transfer { %s; };\n    also-notify { %s; };\n    notify yes;\n' "$SECONDARY_IP" "$SECONDARY_IP"
+        else printf '    notify no;\n'; fi
+    fi
+    printf '};\n'
+}
 render_named() {
     local output=$1 cache
     if [[ $PLATFORM == debian ]]; then cache=/var/cache/bind; else cache=/var/named; fi
     cat >"$output" <<EOF
-// GS Linux: servidor autoritativo para o laboratório, sem recursão pública.
+// GS Linux: DNS autoritativo. master/slave são os nomes compatíveis com as versões suportadas.
 options {
     directory "$cache";
     listen-on port 53 { 127.0.0.1; $SERVER_IP; };
@@ -890,20 +1104,20 @@ options {
     recursion no;
     allow-query { any; };
     allow-transfer { none; };
+    transfer-source $SERVER_IP;
+    notify-source $SERVER_IP;
     dnssec-validation auto;
 };
-zone "$DOMAIN" IN {
-    type master;
-    file "$ZONE_FILE";
-    allow-update { none; };
-    notify no;
-};
 EOF
+    render_zone_declaration "$DOMAIN" "$ZONE_FILE" >>"$output"
+    [[ -z $REVERSE_ZONE ]] || render_zone_declaration "$REVERSE_ZONE" "$REVERSE_FILE" >>"$output"
 }
 render_web() {
     cat >"$1" <<EOF
 # GS Linux: arquivo ordenado antes dos outros sites para ser o padrão.
 ServerName $DOMAIN
+ServerTokens Prod
+ServerSignature Off
 <VirtualHost *:80>
     ServerName $DOMAIN
     ServerAlias www.$DOMAIN $SERVER_IP
@@ -918,20 +1132,38 @@ ServerName $DOMAIN
 EOF
 }
 apply_configuration() {
-    local serial previous=0
-    serial=$(date +%s)
-    if [[ -f $ZONE_FILE ]]; then previous=$(awk '/; serial:/ {print $1; exit}' "$ZONE_FILE"); fi
-    if [[ $previous =~ ^[0-9]{1,10}$ ]] && (( previous >= serial )); then serial=$((previous+1)); fi
-    (( serial < 4294967295 )) || die 'Serial DNS fora do limite; revise a zona existente.'
-    render_zone "$WORK/db.zone" "$serial"
+    local serial previous=0 candidate file
+    if [[ $DNS_ROLE == primary ]]; then
+        for file in "$ZONE_FILE" "$REVERSE_FILE" "$ZONE_DIR/db.zone"; do
+            [[ -f $file ]] || continue
+            candidate=$(awk '/; serial:/ {print $1; exit}' "$file")
+            if [[ $candidate =~ ^[0-9]{1,10}$ ]] && (( 10#$candidate > previous )); then previous=$((10#$candidate)); fi
+        done
+        serial=$(next_zone_serial "$previous")
+        render_zone "$WORK/db.zone" "$serial"
+        render_reverse "$WORK/db.reverse" "$serial"
+        run 'Validando sintaxe da zona DNS direta' named-checkzone "$DOMAIN" "$WORK/db.zone"
+        run 'Validando sintaxe da zona DNS reversa' named-checkzone "$REVERSE_ZONE" "$WORK/db.reverse"
+    fi
     render_named "$WORK/named.conf"
     render_web "$WORK/web.conf"
-    run 'Validando sintaxe da zona DNS' named-checkzone "$DOMAIN" "$WORK/db.zone"
     run 'Validando sintaxe da configuração BIND' named-checkconf "$WORK/named.conf"
-    install -d -m 750 -o root -g "$DNS_GROUP" "$(dirname "$ZONE_FILE")"
-    install -m 640 -o root -g "$DNS_GROUP" "$WORK/db.zone" "$ZONE_FILE"
+    if [[ $DNS_ROLE == primary ]]; then
+        install -d -m 750 -o root -g "$DNS_GROUP" "$ZONE_DIR"
+        install -m 640 -o root -g "$DNS_GROUP" "$WORK/db.zone" "$ZONE_FILE"
+        install -m 640 -o root -g "$DNS_GROUP" "$WORK/db.reverse" "$REVERSE_FILE"
+    else
+        install -d -m 750 -o "$DNS_GROUP" -g "$DNS_GROUP" "$ZONE_DIR"
+        # O BIND receberá cópias novas; nunca geramos registros locais no secundário.
+        rm -f -- "$ZONE_FILE" "$ZONE_FILE.jnl" "$REVERSE_FILE" "$REVERSE_FILE.jnl"
+    fi
     install -m 640 -o root -g "$DNS_GROUP" "$WORK/named.conf" "$DNS_CONF"
     install -m 644 "$WORK/web.conf" "$WEB_CONF"
+    if [[ $PLATFORM == debian ]]; then
+        # Migra o arquivo regular criado pelas versões 1.1.x para sites-available.
+        if [[ -e $WEB_LINK && ! -L $WEB_LINK ]]; then rm -- "$WEB_LINK"; fi
+        run 'Habilitando o site pelo mecanismo padrão do Debian' a2ensite 000-000-gs-linux.conf
+    fi
     # Remove apenas o diretório pertencente ao assistente, já incluído no backup.
     rm -rf -- "$WEB_ROOT"
     cp -a "$WORK/site" "$WEB_ROOT"
@@ -989,9 +1221,7 @@ verify_services() {
     local i name expected response
     systemctl is-active --quiet "$DNS_SERVICE" || die 'O BIND não está ativo.'
     systemctl is-active --quiet "$WEB_SERVICE" || die 'O Apache não está ativo.'
-    verify_dns "$DOMAIN" A "$SERVER_IP"
-    verify_dns "ns1.$DOMAIN" A "$SERVER_IP"
-    verify_dns "www.$DOMAIN" CNAME "$DOMAIN."
+    verify_dns "ns1.$DOMAIN" A "${PRIMARY_IP:-$SERVER_IP}"
     verify_dns "$DOMAIN" NS "ns1.$DOMAIN."
     response=$(dig @"$SERVER_IP" "$DOMAIN" SOA +tcp +short +time=2 +tries=1)
     [[ $response == "ns1.$DOMAIN. hostmaster.$DOMAIN. "* ]] || die 'A consulta DNS por TCP falhou.'
@@ -1007,6 +1237,23 @@ verify_services() {
         esac
         verify_dns "$name" "${REC_TYPE[i]}" "$expected"
     done
+    if [[ -n $REVERSE_ZONE ]]; then
+        response=$(dig @"$SERVER_IP" "$REVERSE_ZONE" SOA +tcp +short +time=2 +tries=1)
+        [[ $response == "ns1.$DOMAIN. hostmaster.$DOMAIN. "* ]] || die 'A zona reversa não está respondendo.'
+        build_ptr_records
+        for i in "${!PTR_IP[@]}"; do
+            response=$(dig @"$SERVER_IP" -x "${PTR_IP[i]}" +short +time=2 +tries=1)
+            grep -Fxq -- "${PTR_NAME[i]}" <<<"$response" || die "PTR incorreto para ${PTR_IP[i]}."
+        done
+        if [[ $DNS_ROLE == secondary ]]; then
+            [[ -s $ZONE_FILE && -s $REVERSE_FILE ]] || die 'O secundário ainda não gravou as duas zonas transferidas.'
+            for name in "$DOMAIN" "$REVERSE_ZONE"; do
+                expected=$(dig -b "$SERVER_IP" @"$PRIMARY_IP" "$name" SOA +short +time=2 +tries=1)
+                response=$(dig @"$SERVER_IP" "$name" SOA +short +time=2 +tries=1)
+                [[ -n $expected && $response == "$expected" ]] || die "A zona $name do secundário difere do primário ou o primário está indisponível."
+            done
+        fi
+    fi
     # --noproxy impede que os testes locais sejam enviados a um proxy corporativo.
     response=$(curl --noproxy '*' --fail --silent --show-error --max-time 10 --resolve "$DOMAIN:80:$SERVER_IP" "http://$DOMAIN/gs-health.txt")
     [[ $response == "$DOMAIN" ]] || die 'O virtual host não está entregando o site configurado.'
@@ -1016,22 +1263,53 @@ verify_services() {
     cmp -s "$WEB_ROOT/index.html" "$WORK/served.html" || die 'O HTML servido não corresponde ao template instalado.'
     ok 'DNS UDP/TCP, autoridade da zona, registros e página padrão HTTP passaram nos testes locais.'
 }
+wait_secondary_transfer() {
+    [[ $DNS_ROLE == secondary ]] || return 0
+    local deadline=$((SECONDS+45)) zone expected answer ready
+    info 'Aguardando até 45 segundos pela transferência das zonas direta e reversa...'
+    while (( SECONDS < deadline )); do
+        ready=1
+        for zone in "$DOMAIN" "$REVERSE_ZONE"; do
+            expected=$(dig -b "$SERVER_IP" @"$PRIMARY_IP" "$zone" SOA +short +time=1 +tries=1 2>/dev/null) || expected=''
+            answer=$(dig @"$SERVER_IP" "$zone" SOA +short +time=1 +tries=1 2>/dev/null) || answer=''
+            [[ $expected == "ns1.$DOMAIN. hostmaster.$DOMAIN. "* && $answer == "$expected" ]] || ready=0
+        done
+        if (( ready )) && [[ -s $ZONE_FILE && -s $REVERSE_FILE ]]; then ok 'As duas zonas foram recebidas e os SOAs coincidem com o primário.'; return; fi
+        sleep 1
+    done
+    die "Transferência não confirmada. No primário, autorize $SERVER_IP e confira domínio, zona reversa, firewall TCP/53 e journalctl -u named."
+}
 save_state() {
-    { printf '%s\n%s\n' "$DOMAIN" "$SERVER_IP"; local i
+    { printf '%s\n' GS_STATE_V2 "$DOMAIN" "$SERVER_IP" "$DNS_ROLE" "${PRIMARY_IP:-$SERVER_IP}" "${SECONDARY_IP:--}" "${REVERSE_NETWORK:--}" "${WEB_IP:--}" "${SERVER_IFACE:--}"; local i
       for i in "${!REC_NAME[@]}"; do printf '%s\t%s\t%s\t%s\n' "${REC_NAME[i]}" "${REC_TYPE[i]}" "${REC_PRIORITY[i]:--}" "${REC_VALUE[i]}"; done
     } >"$STATE_DIR/state"
     chmod 600 "$STATE_DIR/state"
 }
 load_state() {
     [[ -f $STATE_DIR/state ]] || die 'Ainda não existe instalação registrada. Execute sudo bash gs-linux.sh.'
-    local name type priority value
-    { IFS= read -r DOMAIN; IFS= read -r SERVER_IP
+    local name type priority value first network
+    DNS_ROLE=primary; PRIMARY_IP=''; SECONDARY_IP=''; WEB_IP=''; SERVER_IFACE=''
+    REVERSE_NETWORK=''; REVERSE_ZONE=''; REVERSE_PREFIX=''; REVERSE_FILE=''; LEGACY_STATE=0
+    { IFS= read -r first
+      if [[ $first == GS_STATE_V2 ]]; then
+          IFS= read -r DOMAIN; IFS= read -r SERVER_IP; IFS= read -r DNS_ROLE
+          IFS= read -r PRIMARY_IP; IFS= read -r SECONDARY_IP; IFS= read -r network
+          IFS= read -r WEB_IP; IFS= read -r SERVER_IFACE
+          [[ $SECONDARY_IP != - ]] || SECONDARY_IP=''
+          [[ $WEB_IP != - ]] || WEB_IP=''
+          [[ $SERVER_IFACE != - ]] || SERVER_IFACE=''
+          [[ $DNS_ROLE == primary || $DNS_ROLE == secondary ]] || die 'Papel DNS salvo inválido.'
+          valid_ipv4 "$PRIMARY_IP" || die 'IP do primário salvo inválido.'
+          [[ -z $SECONDARY_IP ]] || valid_ipv4 "$SECONDARY_IP" || die 'IP do secundário salvo inválido.'
+          if [[ $network != - ]]; then set_reverse_network "$network" || die 'Rede reversa salva inválida.'; fi
+      else DOMAIN=$first; IFS= read -r SERVER_IP; PRIMARY_IP=$SERVER_IP; LEGACY_STATE=1; fi
       if ! valid_domain "$DOMAIN" || ! valid_ipv4 "$SERVER_IP"; then die 'Estado salvo inválido.'; fi
       REC_NAME=(); REC_TYPE=(); REC_PRIORITY=(); REC_VALUE=()
       while IFS=$'\t' read -r name type priority value; do
           REC_NAME+=("$name"); REC_TYPE+=("$type"); REC_PRIORITY+=("${priority/-/}"); REC_VALUE+=("$value")
       done
     } <"$STATE_DIR/state"
+    [[ -z $PLATFORM ]] || set_zone_paths
 }
 
 # Painel de leitura: cada teste produz evidência, sem reiniciar ou instalar serviços.
@@ -1159,6 +1437,67 @@ report_selinux() {
     esac
     report_command 'Contextos SELinux dos arquivos (inspeção)' ls -Zd "$WEB_ROOT" "$ZONE_FILE" "$DNS_CONF"
 }
+report_zone_sync() {
+    local peer=$1 zone=$2 local_soa
+    capture_probe dig @"$SERVER_IP" "$zone" SOA +short +time=2 +tries=1
+    if probe_failed "SOA local de $zone"; then return; fi
+    local_soa=$PROBE_OUTPUT
+    capture_probe dig -b "$SERVER_IP" @"$peer" "$zone" SOA +short +time=2 +tries=1
+    if probe_failed "SOA de $zone no outro servidor ($peer)"; then return; fi
+    if [[ $local_soa == "ns1.$DOMAIN. hostmaster.$DOMAIN. "* && $local_soa == "$PROBE_OUTPUT" ]]; then
+        report_item OK "SOA/serial de $zone coincidem nos dois servidores"
+    else report_item FALHA "SOA/serial de $zone diferentes ou resposta ausente" 'Confira o primário, o serial, allow-transfer, notify, conectividade TCP/53 e os logs.'; fi
+}
+report_secondary_records() {
+    local zone=$1 records name ttl class type value
+    # AXFR é uma consulta de leitura. O primário só a permite ao IP deste secundário.
+    capture_probe dig -b "$SERVER_IP" @"$PRIMARY_IP" "$zone" AXFR +noall +answer +stats +time=2 +tries=1
+    if probe_failed "Leitura dos registros de $zone no primário"; then return; fi
+    if [[ $PROBE_OUTPUT != *'XFR size:'* || $PROBE_OUTPUT == *'Transfer failed.'* ]]; then
+        report_item FALHA "Transferência autorizada de $zone" 'Confira allow-transfer e TCP/53 no primário.'; return
+    fi
+    records=$PROBE_OUTPUT
+    report_item OK "Transferência autorizada de $zone"
+    while read -r name ttl class type value; do
+        [[ $class == IN && $ttl =~ ^[0-9]+$ ]] || continue
+        case $type in
+            A|CNAME|MX|TXT|PTR)
+                report_match "Cópia no secundário: $name $type" "$value" dig @"$SERVER_IP" "$name" "$type" +short +time=2 +tries=1 ;;
+        esac
+    done <<<"$records"
+}
+report_lab_dns() {
+    local i name
+    heading 'ATIVIDADE FIAP — REVERSA, NSLOOKUP E TRANSFERÊNCIA'
+    if [[ -n $REVERSE_ZONE ]]; then
+        report_match 'NS da zona reversa' "ns1.$DOMAIN." dig @"$SERVER_IP" "$REVERSE_ZONE" NS +short +time=2 +tries=1
+        build_ptr_records
+        for i in "${!PTR_IP[@]}"; do
+            report_match "PTR ${PTR_IP[i]}" "${PTR_NAME[i]}" dig @"$SERVER_IP" -x "${PTR_IP[i]}" +short +time=2 +tries=1
+        done
+        if [[ $DNS_ROLE == secondary ]]; then
+            report_command 'Arquivo da zona direta recebido pelo secundário' test -s "$ZONE_FILE"
+            report_command 'Arquivo da zona reversa recebido pelo secundário' test -s "$REVERSE_FILE"
+            report_zone_sync "$PRIMARY_IP" "$DOMAIN"
+            report_zone_sync "$PRIMARY_IP" "$REVERSE_ZONE"
+            report_secondary_records "$DOMAIN"
+            report_secondary_records "$REVERSE_ZONE"
+        elif [[ -n $SECONDARY_IP ]]; then
+            report_zone_sync "$SECONDARY_IP" "$DOMAIN"
+            report_zone_sync "$SECONDARY_IP" "$REVERSE_ZONE"
+        fi
+    else report_item AVISO 'Instalação antiga sem zona reversa' 'Reexecute a instalação 1.2 para preparar a atividade completa.'; fi
+    report_command 'nslookup: NS (evidência pedida na atividade)' nslookup -timeout=2 -retry=1 -type=NS "$DOMAIN" "$SERVER_IP"
+    report_command 'nslookup: SOA (evidência pedida na atividade)' nslookup -timeout=2 -retry=1 -type=SOA "$DOMAIN" "$SERVER_IP"
+    for i in "${!REC_NAME[@]}"; do
+        [[ ${REC_TYPE[i]} == A || ${REC_TYPE[i]} == MX ]] || continue
+        name=${REC_NAME[i]}; [[ $name == @ ]] && name=$DOMAIN || name=$name.$DOMAIN
+        report_command "nslookup: $name ${REC_TYPE[i]}" nslookup -timeout=2 -retry=1 "-type=${REC_TYPE[i]}" "$name" "$SERVER_IP"
+    done
+    if [[ -d /run/systemd/system ]]; then
+        report_command 'Logs recentes do BIND (inspeção de carregamento/transferência)' journalctl -u "$DNS_SERVICE" -n 40 --no-pager
+    else info 'Logs do systemd indisponíveis nesta sessão. Na VM: sudo journalctl -u named -n 40 --no-pager'; fi
+}
 evidence_panel() {
     local saved_error i name expected answer got_state=0
     REPORT_OK=0 REPORT_FAIL=0 REPORT_UNKNOWN=0
@@ -1170,6 +1509,7 @@ evidence_panel() {
     if saved_error=$( (load_state) 2>&1); then
         load_state; got_state=1
         info "Domínio: $DOMAIN | IP salvo: $SERVER_IP"
+        info "Papel: $DNS_ROLE | Primário: $PRIMARY_IP | Secundário: ${SECONDARY_IP:-não configurado}"
     else report_item 'NÃO VERIFICADO' 'Configuração salva do assistente' "$saved_error Execute com sudo se faltar permissão."; fi
     heading 'CONFIGURAÇÃO E SERVIÇOS'
     report_command 'BIND: sintaxe e carregamento das zonas' named-checkconf -z "$DNS_CONF"
@@ -1190,7 +1530,7 @@ evidence_panel() {
         if command -v ip >/dev/null; then
             capture_probe ip -o -4 addr show
             if (( PROBE_RC != 0 )); then report_item 'NÃO VERIFICADO' 'IP atual da VM'
-            elif awk '{split($4,a,"/");print a[1]}' <<<"$PROBE_OUTPUT" | grep -Fxq -- "$SERVER_IP"; then report_item OK 'IP salvo pertence à VM'
+            elif awk -v wanted="$SERVER_IP" '{split($4,a,"/");if(a[1]==wanted)found=1}END{exit !found}' <<<"$PROBE_OUTPUT"; then report_item OK 'IP salvo pertence à VM'
             else report_item FALHA 'IP salvo não pertence à VM' 'O endereço pode ter mudado por DHCP. Reconfigure com o IP atual.'; fi
         else report_item 'NÃO VERIFICADO' 'IP atual da VM' 'Ferramenta ip ausente.'; fi
         report_match 'NS: servidor responsável pela zona' "ns1.$DOMAIN." dig @"$SERVER_IP" "$DOMAIN" NS +short +time=2 +tries=1
@@ -1209,6 +1549,7 @@ evidence_panel() {
                 report_item OK 'SOA autoritativo por TCP'
             else report_item FALHA 'SOA autoritativo por TCP' 'Esperava NOERROR, sinalizador aa e SOA da zona configurada.'; fi
         fi
+        report_lab_dns
         heading 'HTTP — o Apache entrega o site esperado?'
         report_match 'Página de identificação por IP' "$DOMAIN" curl --noproxy '*' --fail --silent --show-error --max-time 10 "http://$SERVER_IP/gs-health.txt"
         report_match 'VirtualHost pelo domínio (endereço indicado ao curl)' "$DOMAIN" curl --noproxy '*' --fail --silent --show-error --max-time 10 --resolve "$DOMAIN:80:$SERVER_IP" "http://$DOMAIN/gs-health.txt"
@@ -1297,12 +1638,16 @@ main() {
     check_ports
     download_template
     begin_transaction
+    if [[ $DNS_ROLE == secondary ]]; then
+        run 'Parando o BIND para substituir suas cópias de zonas com segurança' systemctl stop "$DNS_SERVICE"
+    fi
     apply_configuration
     configure_firewall
     run 'Ativando BIND na inicialização' systemctl enable "$DNS_SERVICE"
     run 'Ativando Apache na inicialização' systemctl enable "$WEB_SERVICE"
     run 'Iniciando/reiniciando BIND' systemctl restart "$DNS_SERVICE"
     run 'Iniciando/reiniciando Apache' systemctl restart "$WEB_SERVICE"
+    wait_secondary_transfer
     verify_services
     extra_tasks
     save_state
@@ -1311,6 +1656,10 @@ main() {
     info "Abra pelo IP: http://$SERVER_IP/"
     info "Para usar http://$DOMAIN/ em outro computador, ele deve consultar o DNS $SERVER_IP."
     info 'O domínio é do laboratório; não é registrado na Internet. Roteador e firewall externo não são alterados.'
+    if [[ $DNS_ROLE == primary && -n $SECONDARY_IP ]]; then
+        info "Primário pronto. Configure a segunda VM ($SECONDARY_IP) no modo Secundário, usando o mesmo domínio e rede /24."
+        info 'A transferência entre as VMs será comprovada pelo painel 5 depois que ambas estiverem prontas.'
+    fi
     info "Backup: $BACKUP | Log: $LOG"
     info 'Para testar novamente: sudo bash gs-linux.sh --check'
 }

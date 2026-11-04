@@ -32,7 +32,7 @@ SERVER_IP=192.168.56.10
 base_records
 reject 'Registro duplicado' add_record @ A "$SERVER_IP"
 reject 'CNAME não pode coexistir com A' add_record @ CNAME "$DOMAIN"
-reject 'A não pode coexistir com CNAME' add_record www A "$SERVER_IP"
+reject 'A não pode coexistir com CNAME' add_record intranet A "$SERVER_IP"
 reject 'CNAME não aponta para si mesmo' add_record loop CNAME loop.empresa.test
 reject 'MX com destino inexistente' add_record @ MX mail.empresa.test 10
 accept 'A para o destino do MX' add_record mail A 192.168.56.20
@@ -134,13 +134,13 @@ accept 'Rollback UFW usa o mesmo destino, preservando regras IPv6' grep -Fxq -- 
 unset -f systemctl restorecon firewall-cmd ip ufw
 
 # Entrada inválida deve pedir correção; a demo não pede root nem instala pacotes.
-printf 'dominio-invalido\nempresa.test\n999.1.1.1\n192.168.56.10\n9\n0\ns\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/demo"
+printf 'dominio-invalido\naluno.fiap\n1\n999.1.1.1\n192.168.56.10\n0\n\n9\n0\ns\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/demo"
 accept 'Demo rejeita domínio incorreto' grep -Fq 'Exemplo válido' "$TEST_DIR/demo"
 accept 'Demo rejeita IP incorreto' grep -Fq 'Informe o IP' "$TEST_DIR/demo"
 accept 'Demo rejeita opção inexistente' grep -Fq 'Escolha uma opção' "$TEST_DIR/demo"
 accept 'Demo termina com sucesso' grep -Fq 'Demonstração concluída' "$TEST_DIR/demo"
-if printf '\n\n0\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/eof" 2>&1; then echo 'EOF deveria interromper'; exit 1; fi
+if printf 'aluno.fiap\n1\n192.168.56.10\n0\n\n0\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/eof" 2>&1; then echo 'EOF deveria interromper'; exit 1; fi
 pass 'Entrada encerrada não entra em loop nem instala'
-printf '\n\n0\nn\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/cancel"
+printf 'aluno.fiap\n1\n192.168.56.10\n0\n\n0\nn\n' | bash ./gs-linux.sh --demo >"$TEST_DIR/cancel"
 accept 'Confirmação negativa cancela' grep -Fq 'Cancelado' "$TEST_DIR/cancel"
 printf '\n%s testes passaram.\n' "$count"

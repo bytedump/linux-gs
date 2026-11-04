@@ -4,6 +4,10 @@ Um único script Bash para **Debian e Rocky Linux**, com menus em português, co
 banner ASCII, validação das respostas e confirmação antes de alterar a máquina.
 Instala BIND e Apache e publica um template HTML baixado da Internet.
 
+**Versão 1.2:** perfil das atividades DNS Primary/Secondary: domínio `nome.fiap`,
+`www` como A, `intranet` como CNAME, zona reversa /24 com PTR e transferência para
+uma segunda VM. [Passo a passo das duas VMs e demonstração](docs/atividade-dns.md).
+
 ## Menu principal: aprender, treinar e comprovar
 
 ```bash
@@ -59,14 +63,20 @@ Esse modo **não instala, não baixa e não altera configurações**. Serve para
 os menus. Pressione Enter para aceitar o valor entre colchetes. As opções são
 numéricas; não é preciso decorar nomes de registros.
 
-Para uma primeira tentativa, use `empresa.test`, aceite o IP sugerido e conclua os
-registros com `0`. No resumo, `S` continua, `R` refaz as respostas e `N` cancela.
+Para uma primeira tentativa, use `aluno.fiap`, escolha **1 — Primário**, selecione
+o IP da interface Host-Only e informe `0` para usar só uma VM. Aceite a rede reversa
+/24 e conclua os registros com `0`. No resumo, `S` continua, `R` refaz e `N` cancela.
 
 ## Instalar na VM da prova
 
 Use uma VM completa, com systemd, Internet e um IPv4 que permaneça estável.
 Compatibilidade prevista: **Debian 11, 12 e 13; Rocky Linux 8, 9 e 10**.
 Não é um instalador para WSL sem systemd, macOS ou contêineres comuns.
+
+Na atividade com duas placas, prepare Host-Only para as VMs conversarem e NAT para
+Internet; configure IPs fixos distintos na Host-Only. O script lista as interfaces
+e sugere `192.168.56.x` antes da NAT `10.0.2.x`, mas não altera adaptadores do
+VirtualBox nem configura o IP fixo do sistema. Confira a rede pedida na sua turma.
 
 ```bash
 sudo bash gs-linux.sh --install
@@ -78,13 +88,15 @@ acesso a root, precisará da conta administrativa fornecida pelo professor.
 
 O instalador vai:
 
-1. Identificar a distribuição e pedir o domínio e o IP do servidor.
-2. Perguntar quais registros adicionais você quer criar.
+1. Identificar a distribuição e pedir domínio, papel, IP e rede reversa /24.
+2. No primário, pedir o IP opcional do secundário e permitir editar os registros.
+   No secundário, pedir o IP do primário e receber dele as duas zonas.
 3. Mostrar o resumo e pedir confirmação.
 4. Instalar pacotes, baixar o template e guardar backups.
 5. Configurar BIND, Apache e as permissões necessárias.
 6. Liberar DNS e HTTP no firewalld ou UFW, se estiverem ativos.
-7. Ativar os serviços e testar DNS e HTTP de verdade.
+7. Ativar os serviços e testar DNS direto/reverso e HTTP de verdade. No secundário,
+   aguardar até 45 segundos pela transferência e comparar os SOAs das duas zonas.
 
 No Debian instalado por DVD/ISO, o APT pode ainda apontar para `cdrom:` e apresentar
 “Please use apt-cdrom” ou “does not have a Release file”. A partir da versão **1.1.1**,
@@ -118,29 +130,37 @@ Imagine que a VM tenha o endereço `192.168.56.10`:
 
 | Pergunta | Exemplo | Significado |
 | --- | --- | --- |
-| Domínio | `empresa.test` | Nome do laboratório; sem `http://` |
+| Domínio | `aluno.fiap` | Nome do laboratório; sem `http://` |
+| Papel desta VM | `1` | Primário cria as zonas; secundário recebe cópias |
 | IPv4 desta máquina | `192.168.56.10` | IP da interface da VM, não o do computador hospedeiro |
-| Nome de registro | `loja` | O script cria `loja.empresa.test` |
-| Nome `@` | `@` | Representa o próprio `empresa.test` |
-| Destino CNAME/MX | `mail.empresa.test` | Nome completo; não use um IP |
+| IP reservado ao secundário | `192.168.56.20` | Outra VM; use `0` se só tiver uma |
+| Rede reversa | `192.168.56.0/24` | Mesma rede informada nas duas instalações |
+| Nome de registro | `loja` | O script cria `loja.aluno.fiap` |
+| Nome `@` | `@` | Representa o próprio `aluno.fiap` |
+| Destino CNAME/MX | `mail.aluno.fiap` | Nome completo; não use um IP |
 
-O script cria uma base fixa:
+No primário, o script propõe esta base editável:
 
 | Nome | Tipo | Destino |
 | --- | --- | --- |
-| `empresa.test` (`@`) | A | IP da VM |
-| `ns1.empresa.test` | A | IP da VM |
-| `www.empresa.test` | CNAME | `empresa.test` |
-| `empresa.test` | NS | `ns1.empresa.test` |
-| `empresa.test` | SOA | Metadados da zona, gerados automaticamente |
+| `aluno.fiap` (`@`) | A | IP da VM |
+| `ns1.aluno.fiap` | A | IP da VM |
+| `www.aluno.fiap` | A | IP do secundário, ou do primário quando usar só uma VM |
+| `intranet.aluno.fiap` | CNAME | `www.aluno.fiap` |
+| `aluno.fiap` | NS | `ns1.aluno.fiap` |
+| `aluno.fiap` | SOA | Metadados da zona, gerados automaticamente |
 
-Você pode adicionar/remover registros **extras** dos seguintes tipos:
+Use **7** para editar o valor de um registro e **5** para remover. `ns1` é protegido
+porque sustenta SOA/NS; seu IP acompanha o primário informado. Para mudar nome/tipo,
+remova e cadastre novamente, removendo antes aliases/MX dependentes.
+
+Você pode cadastrar estes tipos:
 
 | Tipo | Para que serve | Exemplo |
 | --- | --- | --- |
 | A | Nome para IPv4 | `mail` → `192.168.56.10` |
-| CNAME | Apelido para outro nome | `correio` → `mail.empresa.test` |
-| MX | Servidor que recebe e-mail do domínio | `@` → `mail.empresa.test`, prioridade `10` |
+| CNAME | Apelido para outro nome | `correio` → `mail.aluno.fiap` |
+| MX | Servidor que recebe e-mail do domínio | `@` → `mail.aluno.fiap`, prioridade `10` |
 | TXT | Informação em texto | `@` → `Trabalho de Linux` |
 
 Cadastre o **A do destino antes do CNAME ou MX**. Neste assistente, esses destinos
@@ -148,11 +168,22 @@ devem estar na própria zona e ter um A; aliases externos e cadeias de CNAME nã
 aceitos. Isso evita loops e destinos sem resolução durante o exercício.
 MX não instala e-mail. Prioridade menor significa preferência maior.
 TXT aceita até 200 caracteres ASCII visíveis, incluindo espaços e aspas.
-AAAA, PTR, SRV, zona reversa, servidor de e-mail e HTTPS não fazem parte desta versão.
+Os **PTRs são automáticos** para cada A dentro da rede /24 selecionada. Se vários
+nomes compartilham um IP, a consulta reversa pode retornar vários PTRs. CNAME não
+ganha PTR próprio. Um A externo, como `webmail → 10.200.200.200`, não entra na zona
+reversa de `192.168.56.0/24`.
 
-Para corrigir a base fixa ou trocar domínio/IP, escolha `R` no resumo ou execute
+SOA usa os valores da atividade: refresh `28800`, retry `14400`, expire `86400` e
+minimum `600`. Serial segue `AAAAMMDDnn`, começando em `00`; cada reaplicação o
+aumenta. Relógio anterior ao serial salvo ou mais de 100 versões no dia interrompem
+a publicação com aviso. Migração de um serial epoch antigo também preserva o aumento.
+AAAA, SRV, reversa de outros prefixos, servidor de e-mail e HTTPS não estão incluídos.
+
+Para trocar domínio/IP/papel, escolha `R` no resumo ou execute
 novamente o assistente. A reaplicação substitui a configuração gerenciada pela
 lista nova; os registros extras anteriores não são importados automaticamente.
+Estado salvo na versão 1.1 continua legível pelo painel, que avisa sobre a reversa
+ausente; reexecutar a instalação aplica o perfil novo com backup dos arquivos antigos.
 
 ## Conferir depois de instalar
 
@@ -167,6 +198,9 @@ O painel mostra o comando, a resposta e o resultado de cada teste, incluindo:
 - Sintaxe da configuração BIND/Apache; serviços ativos e habilitados no boot.
 - Portas UDP/53, TCP/53 e TCP/80 e os processos em escuta.
 - IP salvo ainda presente na VM; NS e cada registro salvo; SOA autoritativo por TCP.
+- PTRs, `nslookup` NS/SOA/A/MX e logs recentes do BIND; com secundário configurado,
+  compara SOA/serial dos dois servidores para as zonas direta e reversa.
+- No secundário, confirma que os arquivos das duas zonas foram recebidos.
 - Resposta HTTP pelo IP e pelo domínio; conteúdo HTML e acesso ao CSS.
 - firewalld: zona da interface e permissões atuais/permanentes; UFW: regras locais.
 - No Rocky, estado e contextos do SELinux.
@@ -208,26 +242,29 @@ Não instala nem modifica configurações.
 Para estudar os comandos por trás do teste, substitua o IP/domínio pelos seus:
 
 ```bash
-dig @192.168.56.10 empresa.test A
-dig @192.168.56.10 www.empresa.test CNAME
-dig @192.168.56.10 empresa.test MX
-dig @192.168.56.10 empresa.test TXT
-dig @192.168.56.10 empresa.test SOA +tcp
+dig @192.168.56.10 aluno.fiap A
+dig @192.168.56.10 www.aluno.fiap A
+dig @192.168.56.10 intranet.aluno.fiap CNAME
+dig @192.168.56.10 -x 192.168.56.20
+dig @192.168.56.10 aluno.fiap MX
+dig @192.168.56.10 aluno.fiap TXT
+dig @192.168.56.10 aluno.fiap SOA +tcp
 curl --noproxy '*' http://192.168.56.10/
-curl --noproxy '*' --resolve empresa.test:80:192.168.56.10 http://empresa.test/
+curl --noproxy '*' --resolve aluno.fiap:80:192.168.56.10 http://aluno.fiap/
 ```
 
 O `@IP` do `dig` significa **consultar aquele servidor DNS**. O `--resolve` do curl
 permite testar o site pelo domínio sem modificar o DNS do seu computador.
 
-Abra `http://IP-DA-VM/` no navegador. Para abrir `http://empresa.test/` em outro
+Abra `http://IP-DA-VM/` no navegador. Para abrir `http://aluno.fiap/` em outro
 computador, ele precisa usar a VM como DNS para essa zona. O script configura o
 servidor inteiro; não altera automaticamente computadores clientes, DHCP,
 roteadores, encaminhamentos do hipervisor ou firewalls do provedor.
 
 O DNS é **autoritativo, sem recursão**: responde pela sua zona, não substitui um
 resolvedor geral para navegar na Internet. Use consultas explícitas com `dig @IP`
-para a demonstração. A escolha de `.test` não registra um domínio público.
+para a demonstração. O sufixo `.fiap` segue o enunciado local e não registra domínio
+público; para laboratórios genéricos, `.test` é um sufixo reservado a testes.
 
 ## O que muda entre Debian e Rocky
 
@@ -237,9 +274,15 @@ para a demonstração. A escolha de `.test` não registra um domínio público.
 | Serviço DNS | `named` (pacote `bind9`) | `named` (pacote `bind`) |
 | Serviço Web | `apache2` | `httpd` |
 | Configuração BIND | `/etc/bind/named.conf` | `/etc/named.conf` |
-| Zona do laboratório | `/var/lib/bind/gs-linux/db.zone` | `/var/named/gs-linux/db.zone` |
-| Site Apache | `/etc/apache2/sites-enabled/000-000-gs-linux.conf` | `/etc/httpd/conf.d/00-gs-linux.conf` |
+| Diretório das zonas primárias | `/var/lib/bind/gs-linux/` | `/var/named/gs-linux/` |
+| Diretório das zonas secundárias | `/var/cache/bind/gs-linux/` | `/var/named/slaves/gs-linux/` |
+| Site Apache | `/etc/apache2/sites-available/000-000-gs-linux.conf` + `a2ensite` | `/etc/httpd/conf.d/00-gs-linux.conf` |
 | Arquivos do site | `/var/www/gs-linux` | `/var/www/gs-linux` |
+
+O arquivo direto se chama `DOMINIO.zone`; o reverso, por exemplo,
+`56.168.192.in-addr.arpa`. O secundário usa uma pasta gravável pelo BIND, inclusive
+com os contextos padrão de `slaves` no Rocky. Apache usa `ServerTokens Prod` e
+`ServerSignature Off` para não divulgar sua versão.
 
 No Rocky, `restorecon` aplica os contextos padrão do SELinux. O script **não usa
 `setenforce 0`**. Se firewalld está ativo, libera os serviços `dns` e `http` na zona
@@ -262,6 +305,9 @@ Leia a mensagem `[ERRO]`: ela indica a etapa e o caminho do log. Logs ficam em
 | Erro no download/pacotes | Confira Internet, DNS, repositórios e o log; depois execute novamente |
 | `cdrom:`, `apt-cdrom` ou DVD sem `Release` | Atualize para a versão 1.1.1 ou posterior e execute novamente; o reparo de fontes APT é automático |
 | CNAME/MX sem destino | Primeiro crie o registro A do destino |
+| Transferência não confirmada | Confira domínio/rede iguais, primário ativo, IP do secundário autorizado e TCP/53 entre as VMs |
+| Primário pronto, painel falha ao consultar secundário | Configure/inicie a segunda VM e repita o painel nas duas |
+| Serial futuro ou limite atingido | Confira a data da VM e o serial salvo; não diminua o serial manualmente |
 | Teste local passa, outro PC não acessa | Confira rede da VM, firewall externo e configuração DNS do cliente |
 
 Se a falha acontecer após o início da alteração dos arquivos, o script tenta
@@ -271,8 +317,10 @@ capturado após a instalação dos pacotes. O log registra falhas na restauraç�
 `kill -9` não permitem executar a recuperação; os backups continuam disponíveis.
 Eles contêm `manifest.txt` e os caminhos originais dentro de `files/`.
 
-O script nunca considera falha de teste como sucesso. A configuração DNS tem
-recursão, transferência de zona e atualização dinâmica desativadas.
+O script nunca considera falha de teste como sucesso. Recursão e atualização
+dinâmica ficam desativadas. No primário, a transferência é permitida **somente ao
+IP do secundário informado**, com `also-notify` e `notify yes`; sem secundário,
+transferências e notify ficam desativados. Não há TSIG neste perfil de rede isolada.
 
 ## Entender o código para as três tarefas surpresa
 
@@ -280,7 +328,7 @@ Leia as funções nesta ordem:
 
 1. `wizard`: perguntas e resumo; `valid_*`: validação das respostas.
 2. `install_packages`: instalação específica de cada distribuição.
-3. `render_zone`, `render_named`, `render_web`: conteúdo dos arquivos.
+3. `render_zone`, `render_reverse`, `render_named`, `render_web`: conteúdo dos arquivos.
 4. `apply_configuration`: validação e publicação dos arquivos.
 5. `configure_firewall`: portas necessárias.
 6. `verify_services`: consultas DNS e requisições HTTP.
@@ -306,6 +354,7 @@ ser implementadas conforme o enunciado; esse ponto de extensão não as adivinha
 bash tests/unit.sh
 bash tests/learning-status.sh
 bash tests/apt-sources.sh  # requer apt-get; não usa rede nem altera /etc
+bash tests/dns-lab.sh
 ```
 
 Os testes locais cobrem entrada inválida, conflitos entre registros, escape de TXT,
@@ -314,15 +363,38 @@ Também cobrem guia/orientador sem root, ajuda contextual, entrada literal, falh
 acumuladas no painel, ferramentas ausentes e exportação de evidências.
 Os testes de APT usam o parser real em diretórios temporários para conferir fontes
 legadas/deb822, preservação de mirrors, assinaturas obrigatórias, backups e repetição.
+O perfil DNS testa edição, PTRs, SOA, serial, ACL/notify, primário/secundário,
+compatibilidade do estado antigo e preferência pela interface Host-Only.
 
 `tests/integration.sh` exige um **contêiner descartável**, root, checkout montado
 em `/repo` e `GS_DISPOSABLE_CONTAINER=yes`. Ele instala pacotes e inicia BIND/Apache
 reais; não o execute na sua VM de trabalho. Mantém TLS e assinaturas dos pacotes.
 
+`tests/dns-transfer.sh` usa **dois contêineres descartáveis**, na mesma rede /24,
+com BIND, Apache, curl, iproute2 e dnsutils instalados, o repositório em `/repo`
+e `GS_DISPOSABLE_CONTAINER=yes`. Com os contêineres já preparados, execute:
+
+```bash
+# Dentro do primário; substitua pelo IP real do contêiner secundário:
+bash /repo/tests/dns-transfer.sh init primary 172.29.56.20
+# Dentro do secundário; substitua pelo IP real do contêiner primário:
+bash /repo/tests/dns-transfer.sh init secondary 172.29.56.10
+# Nas duas máquinas:
+bash /repo/tests/dns-transfer.sh check
+# No primário:
+bash /repo/tests/dns-transfer.sh update
+# No secundário:
+bash /repo/tests/dns-transfer.sh check-update
+```
+
+Esses testes transferem zonas reais, conferem AXFR permitido/recusado, acrescentam
+o A externo `webmail` e um A local com PTR, e comprovam a atualização no secundário.
+Não são comandos de instalação para usar na prova; lá, use o assistente normal.
+
 Validação realizada nesta entrega:
 
 - Debian 12: BIND e Apache reais, download do template, consultas A/CNAME/MX/TXT/NS,
-  autoridade SOA, DNS UDP/TCP, HTTP por domínio/IP, estado salvo e reaplicação passaram.
+  PTRs, autoridade SOA, DNS UDP/TCP, HTTP por domínio/IP, estado salvo e reaplicação passaram.
   O novo painel foi exercitado com HTTP funcionando e depois com Apache parado:
   detectou a falha Web e continuou mostrando os resultados DNS. As consultas de
   firewalld/UFW foram exercitadas com respostas simuladas, sem alterar regras reais.
@@ -330,6 +402,10 @@ Validação realizada nesta entrega:
   ambiente (`403` para `mirrors.rockylinux.org`). A instalação real ainda não foi validada.
 - Debian 13: erro de repositório CD/DVD reproduzido em contêiner; o reparo automático
   permitiu atualizar pacotes e concluir a integração com BIND/Apache reais e o painel.
+  Na versão 1.2, dois contêineres com BIND/Apache reais confirmaram transferência
+  direta/reversa, AXFR permitido somente ao secundário, atualização de A/PTR após
+  aumento do serial e cabeçalho Apache sem versão. O painel conferiu os registros
+  transferidos, incluindo o novo `webmail`.
 - Debian 11 e Rocky 8/10: caminhos e seleção de plataforma cobertos pelos testes;
   instalação completa ainda não executada nessas versões.
 - Os contêineres não validam boot com systemd, SELinux enforcing nem tráfego de

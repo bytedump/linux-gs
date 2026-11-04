@@ -28,8 +28,11 @@ if bash gs-linux.sh --learn </dev/null >"$test_dir/eof" 2>&1; then echo 'EOF dev
 check 'EOF interrompe o guia sem loop' grep -Fq 'Entrada encerrada' "$test_dir/eof"
 MODE=demo
 wizard >"$test_dir/wizard" <<'INPUT'
-empresa.test
+aluno.fiap
+1
 192.168.56.10
+0
+
 1
 loja
 192.168.56.20
@@ -38,7 +41,7 @@ loja
 0
 s
 INPUT
-check 'Ajuda durante cadastro preserva registro extra' test "${REC_NAME[3]}:${REC_VALUE[3]}" = loja:192.168.56.20
+check 'Ajuda durante cadastro preserva registro extra' test "${REC_NAME[4]}:${REC_VALUE[4]}" = loja:192.168.56.20
 check 'Ajuda contextual foi exibida' grep -Fq 'O ponto final' "$test_dir/wizard"
 check 'Saída redirecionada não contém escapes ANSI' test "$(LC_ALL=C tr -cd '\033' <"$test_dir/menu" | wc -c)" -eq 0
 

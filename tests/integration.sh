@@ -12,13 +12,17 @@ WORK=$(mktemp -d)
 LOG=$WORK/install.log
 trap 'rm -rf "$WORK"' EXIT
 install_packages
-DOMAIN=empresa.test
+DOMAIN=aluno.fiap
 SERVER_IP=$(detect_ip)
 valid_ipv4 "$SERVER_IP"
+PRIMARY_IP=$SERVER_IP
+WEB_IP=$SERVER_IP
+set_reverse_network "${SERVER_IP%.*}.0/24"
+set_zone_paths
 base_records
 add_record mail A "$SERVER_IP"
-add_record @ MX mail.empresa.test 10
-add_record correio CNAME mail.empresa.test
+add_record @ MX mail.aluno.fiap 10
+add_record correio CNAME mail.aluno.fiap
 add_record @ TXT 'GS "Linux" e \ teste'
 download_template
 apply_configuration
