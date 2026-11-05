@@ -22,36 +22,75 @@ declare -a APT_PATHS=() APT_EXISTS=()
 DNS_WAS_ACTIVE=0 WEB_WAS_ACTIVE=0 DNS_WAS_ENABLED=0 WEB_WAS_ENABLED=0
 declare -a REC_NAME=() REC_TYPE=() REC_VALUE=() REC_PRIORITY=()
 declare -a SAVED_PATHS=() SAVED_EXISTS=() FW_ADDED=()
-RED='' GREEN='' YELLOW='' CYAN='' BLUE='' MAGENTA='' BOLD='' RESET=''
+RED='' GREEN='' YELLOW='' CYAN='' BLUE='' MAGENTA='' BOLD='' RESET='' MUTED=''
+UI_WIDTH=76
 
 colors() {
+    local columns=${COLUMNS:-80}
+    if [[ -t 1 ]] && command -v tput >/dev/null; then columns=$(tput cols 2>/dev/null) || columns=80; fi
+    [[ $columns =~ ^[0-9]{1,4}$ ]] || columns=80
+    UI_WIDTH=$((10#$columns-4))
+    (( UI_WIDTH <= 76 )) || UI_WIDTH=76
+    (( UI_WIDTH >= 20 )) || UI_WIDTH=20
     if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
-        RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'
+        RED=$'\e[91m'; GREEN=$'\e[92m'; YELLOW=$'\e[93m'
         CYAN=$'\e[36m'; BLUE=$'\e[94m'; MAGENTA=$'\e[95m'; BOLD=$'\e[1m'; RESET=$'\e[0m'
+        MUTED=$'\e[90m'
     fi
 }
-info() { printf '%s[INFO]%s %s\n' "$CYAN" "$RESET" "$*"; }
-ok() { printf '%s[ OK ]%s %s\n' "$GREEN" "$RESET" "$*"; }
-warn() { printf '%s[AVISO]%s %s\n' "$YELLOW" "$RESET" "$*"; }
-die() { printf '%s[ERRO]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
-heading() { printf '\n%s%s=== %s ===%s\n' "$BOLD" "$MAGENTA" "$*" "$RESET"; }
-menu_item() { printf '  %s%s)%s %s\n' "$CYAN$BOLD" "$1" "$RESET" "$2"; }
-explain() { printf '%s[ENTENDA]%s %s\n' "$BLUE" "$RESET" "$*"; }
+ui_rule() {
+    local line
+    printf -v line '%*s' "$UI_WIDTH" ''
+    printf '  %s%s%s\n' "$MUTED" "${line// /-}" "$RESET"
+}
+# Quebra apenas os textos da interface por palavras; não altera respostas ou arquivos.
+ui_wrap() {
+    local offset=$1 text=$2 width line word paragraph padding first=1
+    local -a words=()
+    width=$((UI_WIDTH-offset)); (( width >= 16 )) || width=16
+    printf -v padding '%*s' "$((offset+2))" ''
+    while IFS= read -r paragraph; do
+        if (( ! first )); then printf '%s' "$padding"; fi
+        first=0; line=''
+        read -r -a words <<<"$paragraph"
+        for word in "${words[@]}"; do
+            if [[ -n $line ]] && (( ${#line}+${#word}+1 > width )); then
+                printf '%s\n%s' "$line" "$padding"; line=$word
+            else line+=${line:+ }$word; fi
+        done
+        printf '%s\n' "$line"
+    done <<<"$text"
+}
+ui_message() {
+    printf '  %s%s%s ' "$1" "$2" "$RESET"
+    ui_wrap "$((${#2}+1))" "$3"
+}
+ui_group() { printf '\n  %s%s%s\n' "$BLUE$BOLD" "$*" "$RESET"; }
+ui_detail() { printf '  %s%-14s%s %s%s%s\n' "$MUTED" "$1" "$RESET" "$BOLD" "$2" "$RESET"; }
+ui_step() { heading "PASSO $1 DE 5  /  $2"; }
+info() { ui_message "$CYAN" '[INFO]' "$*"; }
+ok() { ui_message "$GREEN$BOLD" '[ OK ]' "$*"; }
+warn() { ui_message "$YELLOW$BOLD" '[AVISO]' "$*"; }
+die() { { printf '\n'; ui_message "$RED$BOLD" '[ERRO]' "$*"; } >&2; exit 1; }
+heading() { printf '\n'; ui_rule; printf '  %s%s%s\n' "$CYAN$BOLD" "$*" "$RESET"; ui_rule; }
+menu_item() { printf '  %s[ %s ]%s  ' "$CYAN$BOLD" "$1" "$RESET"; ui_wrap "$((${#1}+6))" "$2"; }
+explain() { ui_message "$BLUE" '[ENTENDA]' "$*"; }
 pause_reading() { ask 'Enter para voltar ao menu'; }
 banner() {
-    printf '%s' "$CYAN"
-    cat <<'ART'
-  +------------------------------------------+
-  |   ____ ____     _     ___ _   _ _   ___  |
-  |  / ___/ ___|   | |   |_ _| \ | | | | \ \ |
-  | | |  _\___ \   | |    | ||  \| | | | |> >|
-  | | |_| |___) |  | |___ | || |\  | |_| /_/ |
-  |  \____|____/   |_____|___|_| \_|\___/    |
-  |       DNS + WEB | DEBIAN + ROCKY          |
-  +------------------------------------------+
+    printf '\n%s' "$CYAN$BOLD"
+    if (( UI_WIDTH >= 54 )); then
+        cat <<'ART'
+    ____ ____       _     ___ _   _ _   ___  __
+   / ___/ ___|     | |   |_ _| \ | | | | \ \/ /
+  | |  _\___ \     | |    | ||  \| | | | |\  /
+  | |_| |___) |    | |___ | || |\  | |_| |/  \
+   \____|____/     |_____|___|_| \_|\___//_/\_\
 ART
-    printf '%s' "$RESET"
-    info "Assistente da GS v$VERSION — use em uma VM de laboratório."
+    else printf '  GS / LINUX\n'; fi
+    printf '%s\n' "$RESET"
+    printf '  %sASSISTENTE DA GS%s  %sv%s%s\n' "$BOLD" "$RESET" "$MUTED" "$VERSION" "$RESET"
+    printf '  %sDebian + Rocky Linux  /  DNS + Web%s\n' "$BLUE" "$RESET"
+    printf '  %s' "$MUTED"; ui_wrap 0 'Aprenda. Configure. Comprove. Use em uma VM de laboratório.'; printf '%s' "$RESET"
 }
 help_text() {
     cat <<'HELP'
@@ -75,7 +114,11 @@ HELP
 # O texto digitado nunca é executado como comando (não usamos eval).
 ask() {
     local prompt=$1 default=${2:-} answer
-    if [[ -n $default ]]; then printf '%s%s%s [%s%s%s]: ' "$BOLD$CYAN" "$prompt" "$RESET" "$YELLOW" "$default" "$RESET"; else printf '%s%s%s: ' "$BOLD$CYAN" "$prompt" "$RESET"; fi
+    printf '\n  %s' "$BOLD"; ui_wrap 0 "$prompt"; printf '%s' "$RESET"
+    if [[ -n $default ]]; then
+        printf '  %sEnter para usar:%s %s%s%s\n' "$MUTED" "$RESET" "$CYAN$BOLD" "$default" "$RESET"
+    fi
+    printf '  %s> %s' "$CYAN$BOLD" "$RESET"
     if ! IFS= read -r answer; then die 'Entrada encerrada. Execute em um terminal interativo.'; fi
     answer="${answer#"${answer%%[![:space:]]*}"}"
     answer="${answer%"${answer##*[![:space:]]}"}"
@@ -330,14 +373,17 @@ EOF
 learning_menu() {
     while :; do
         heading 'APRENDER — escolha o que ainda não entendeu'
+        ui_group 'FUNDAMENTOS DO LABORATÓRIO'
         menu_item 1 'DNS, BIND, zona reversa e primário/secundário'
         menu_item 2 'A, CNAME, MX, TXT, PTR, NS, SOA e TTL'
         menu_item 3 'Apache, HTTP, template e VirtualHost'
         menu_item 4 'IP, máscara, gateway e portas'
+        ui_group 'SERVIÇOS, DIAGNÓSTICO E PROVA'
         menu_item 5 'DHCP: o que é e o que o professor pode pedir'
         menu_item 6 'Firewall e SELinux'
         menu_item 7 'Serviços, inicialização e logs'
         menu_item 8 'Possíveis tarefas e como demonstrar cada uma'
+        printf '\n'
         menu_item 0 'Voltar / sair do guia'
         ask 'Assunto' 0
         case $REPLY in
@@ -416,12 +462,16 @@ tutor_menu() {
 home_menu() {
     while :; do
         heading 'O QUE VOCÊ QUER FAZER?'
+        ui_group 'COMECE POR AQUI'
         menu_item 1 'Aprender: glossário e exemplos'
         menu_item 2 'Orientador: o professor pediu...'
         menu_item 3 'Treinar a instalação (demonstração, sem alterações)'
+        ui_group 'CONFIGURE SUA VM'
         menu_item 4 'Instalar/configurar DNS + Web nesta VM'
+        ui_group 'MOSTRE O RESULTADO'
         menu_item 5 'Comprovar: serviços, portas, DNS, Web e firewall'
         menu_item 6 'Salvar relatório de comprovação em texto'
+        printf '\n'
         menu_item 0 'Sair'
         ask 'Escolha uma opção' 0
         case $REPLY in
@@ -514,7 +564,7 @@ choose_server_ip() {
             LOCAL_IPS+=("$addr"); LOCAL_IFACES+=("$iface")
         done < <(awk 'NF {print $2,$4}' <<<"$addresses")
     fi
-    heading 'ESCOLHA A INTERFACE DO LABORATÓRIO'
+    ui_step 2 'ESCOLHA A INTERFACE DO LABORATÓRIO'
     explain 'Na atividade: Host-Only em 192.168.56.x para as VMs conversarem; NAT para Internet.'
     for i in "${!LOCAL_IPS[@]}"; do
         menu_item "$((i+1))" "${LOCAL_IFACES[i]} — ${LOCAL_IPS[i]}"
@@ -606,11 +656,22 @@ base_records() {
     REC_VALUE=("$PRIMARY_IP" "$PRIMARY_IP" "$WEB_IP" "www.$DOMAIN"); REC_PRIORITY=('' '' '' '')
 }
 show_records() {
-    local i
-    printf '\n%-4s %-22s %-7s %s\n' 'Nº' 'NOME' 'TIPO' 'VALOR'
+    local i type_color
+    ui_group 'REGISTROS CADASTRADOS'
+    if (( UI_WIDTH >= 62 )); then
+        printf '  %s%-4s %-22s %-7s %s%s\n' "$MUTED" 'Nº' 'NOME' 'TIPO' 'VALOR' "$RESET"
+        ui_rule
+    fi
     for i in "${!REC_NAME[@]}"; do
-        printf '%-4s %-22s %-7s %s %s\n' "$((i+1))" "${REC_NAME[i]}" "${REC_TYPE[i]}" "${REC_PRIORITY[i]}" "${REC_VALUE[i]}"
+        case ${REC_TYPE[i]} in A) type_color=$CYAN ;; CNAME) type_color=$BLUE ;; MX) type_color=$MAGENTA ;; *) type_color=$YELLOW ;; esac
+        if (( UI_WIDTH >= 62 )); then
+            printf '  %s%-4s%s %-22s %s%-7s%s %s%s\n' "$MUTED" "$((i+1))" "$RESET" "${REC_NAME[i]}" "$type_color$BOLD" "${REC_TYPE[i]}" "$RESET" "${REC_PRIORITY[i]:+${REC_PRIORITY[i]} }" "${REC_VALUE[i]}"
+        else
+            printf '  %s[ %s ]%s %s  %s%s%s\n' "$MUTED" "$((i+1))" "$RESET" "${REC_NAME[i]}" "$type_color$BOLD" "${REC_TYPE[i]}" "$RESET"
+            printf '        %s%s\n' "${REC_PRIORITY[i]:+${REC_PRIORITY[i]} }" "${REC_VALUE[i]}"
+        fi
     done
+    ui_rule
     info 'Você pode editar valores ou remover registros. ns1 acompanha o IP do primário e é necessário ao SOA/NS.'
 }
 prompt_record() {
@@ -696,12 +757,14 @@ wizard() {
     local suggested choice i
     while :; do
         LEGACY_STATE=0; PRIMARY_IP=''; SECONDARY_IP=''; WEB_IP=''
+        ui_step 1 'DOMÍNIO E PAPEL DESTA VM'
         while :; do
             ask 'Domínio da atividade (seu nome + .fiap, sem http://)' nome.fiap
             DOMAIN=${REPLY,,}; DOMAIN=${DOMAIN%.}
             if valid_domain "$DOMAIN" && [[ $DOMAIN != *.local ]]; then break; fi
             warn 'Exemplo válido: aluno.fiap. Evite .local, reservado para descoberta de rede.'
         done
+        ui_group 'COMO ESTA VM PARTICIPA DO LABORATÓRIO'
         while :; do
             menu_item 1 'Primário: criar e editar as zonas (primeira VM)'
             menu_item 2 'Secundário: receber as zonas do primário (segunda VM)'
@@ -732,21 +795,26 @@ wizard() {
             REC_NAME=(); REC_TYPE=(); REC_VALUE=(); REC_PRIORITY=()
             explain 'No secundário, os registros vêm da transferência. Edite-os sempre no primário.'
         fi
+        ui_step 3 'ZONA REVERSA'
         while :; do
             ask 'Rede /24 da zona reversa (use a mesma nas duas VMs)' "${PRIMARY_IP%.*}.0/24"
             if set_reverse_network "$REPLY"; then break; fi
             warn 'Este perfil atende redes /24, como 192.168.56.0/24. Informe o endereço terminado em .0/24.'
         done
         set_zone_paths
+        ui_step 4 'REGISTROS DNS'
         while [[ $DNS_ROLE == primary ]]; do
             show_records
+            ui_group 'ADICIONAR UM REGISTRO'
             menu_item 1 'A — nome → IPv4'
             menu_item 2 'CNAME — apelido → outro nome'
             menu_item 3 'MX — servidor de e-mail'
             menu_item 4 'TXT — texto'
+            ui_group 'REVISAR OU ENTENDER'
             menu_item 5 'Remover registro'
             menu_item 6 'Não entendi os registros: abrir explicação'
             menu_item 7 'Editar o valor de um registro existente'
+            printf '\n'
             menu_item 0 'Concluir registros'
             ask 'Escolha uma opção' 0
             case $REPLY in
@@ -754,10 +822,17 @@ wizard() {
                 5) remove_record ;; 6) lesson records; pause_reading ;; 7) edit_record ;; 0) break ;; *) warn 'Escolha uma opção de 0 a 7.' ;;
             esac
         done
-        printf '\n%sRESUMO ANTES DE CONTINUAR%s\n' "$BOLD" "$RESET"
-        info "Domínio: $DOMAIN | IP: $SERVER_IP | Sistema: $PLATFORM"
-        info "Papel: $DNS_ROLE | Primário: $PRIMARY_IP | Secundário: ${SECONDARY_IP:-nenhum}"
-        info "Zona reversa: $REVERSE_ZONE | SOA: 28800 / 14400 / 86400 / 600 | Serial: AAAAMMDDnn"
+        ui_step 5 'RESUMO ANTES DE CONTINUAR'
+        ui_detail 'Domínio' "$DOMAIN"
+        ui_detail 'IP desta VM' "$SERVER_IP"
+        ui_detail 'Sistema' "$PLATFORM"
+        if [[ $DNS_ROLE == primary ]]; then ui_detail 'Papel' 'Primário (master)'
+        else ui_detail 'Papel' 'Secundário (slave)'; fi
+        ui_detail 'Primário' "$PRIMARY_IP"
+        ui_detail 'Secundário' "${SECONDARY_IP:-nenhum}"
+        ui_detail 'Zona reversa' "$REVERSE_ZONE"
+        ui_detail 'SOA' '28800 / 14400 / 86400 / 600'
+        ui_detail 'Serial' 'AAAAMMDDnn'
         if [[ $DNS_ROLE == primary ]]; then
             show_records
             info 'PTRs serão criados para cada registro A dentro da rede /24 escolhida; CNAME não recebe PTR.'
@@ -767,11 +842,13 @@ wizard() {
                 fi
             done
         else info 'As zonas direta e reversa serão recebidas do primário. Ele deve autorizar o IP desta VM.'; fi
+        ui_group 'O QUE SERÁ APLICADO'
         info 'Instalar: BIND e Apache; baixar: template Bare / Start Bootstrap (licença MIT).'
         warn 'A configuração principal do BIND será substituída; o Apache servirá este site como padrão.'
         info 'Arquivos alterados terão backup. Pacotes instalados permanecem se houver falha.'
         [[ $PLATFORM != debian ]] || info 'APT: fontes de CD/DVD serão desativadas; se faltar fonte online, adicionar repositórios oficiais com backup.'
         info 'Firewall ativo: liberar somente DNS (TCP/UDP 53) e HTTP (TCP 80). SELinux permanece ativo.'
+        ui_rule
         ask 'S = continuar, R = refazer as respostas, N = sair' N; choice=${REPLY,,}
         case $choice in s|sim) return ;; r) continue ;; *) info 'Cancelado. Nenhuma configuração aplicada.'; exit 0 ;; esac
     done
@@ -1324,12 +1401,12 @@ report_item() {
         FALHA) color=$RED; REPORT_FAIL=$((REPORT_FAIL+1)) ;;
         *) color=$YELLOW; REPORT_UNKNOWN=$((REPORT_UNKNOWN+1)) ;;
     esac
-    printf '%s[%s]%s %s\n' "$color$BOLD" "$status" "$RESET" "$label"
-    if [[ -n $detail ]]; then printf '    %s\n' "$detail"; fi
+    printf '  %s[%s]%s %s\n' "$color$BOLD" "$status" "$RESET" "$label"
+    if [[ -n $detail ]]; then printf '    %s%s%s\n' "$MUTED" "$detail" "$RESET"; fi
 }
 capture_probe() {
     PROBE_OUTPUT='' PROBE_RC=0
-    printf '%s  $' "$BLUE"
+    printf '\n%s  $' "$BLUE"
     printf ' %q' "$@"
     printf '%s\n' "$RESET"
     if ! command -v "$1" >/dev/null; then PROBE_OUTPUT="Ferramenta ausente: $1"; PROBE_RC=127
@@ -1577,7 +1654,7 @@ evidence_panel() {
 }
 plain_evidence_panel() {
     # Variáveis locais mantêm as cores da interface após salvar o relatório.
-    local RED='' GREEN='' YELLOW='' CYAN='' BLUE='' MAGENTA='' BOLD='' RESET=''
+    local RED='' GREEN='' YELLOW='' CYAN='' BLUE='' MAGENTA='' BOLD='' RESET='' MUTED=''
     evidence_panel
 }
 export_report() {
