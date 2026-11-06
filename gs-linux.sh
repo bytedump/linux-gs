@@ -6,7 +6,19 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.2.0
+VERSION=1.2.3
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd) || SCRIPT_DIR=.
+# Cópia local do template (pasta ao lado do script) e hashes conhecidos dos arquivos.
+# Os hashes ficam AQUI, dentro do .sh: valem tanto para o download quanto para a cópia local.
+TEMPLATE_DIR=${GS_TEMPLATE_DIR:-$SCRIPT_DIR/template} TEMPLATE_SOURCE=''
+TEMPLATE_SHA256=(
+    '0417dd0f16e8db738a8dd20ce57ad7a6867ae163971684ee446c846c075607be  index.html'
+    '058eafd647eb2e24597d598659f4a963d928d92bfd33da5ce730c39b80f945ff  css/styles.css'
+    '8971cc202dc06b18e7bde4174ecdcbde1454a316fb018af253c8f5bc05059d00  js/scripts.js'
+    '8b1060f193768c55bc48dede8ba8da9be6c93f8e6dcae946e36f1a8956b7269b  assets/favicon.ico'
+    'e8b857747301fcd4c885b3216544b18bbf60328aec2c34da614787346cf40282  LICENSE'
+    '9520018fa5d81f4e4dc9d06afb576f90cbbaba209cfcc6cb60e1464647f7890b  js/bootstrap.bundle.min.js'
+)
 MODE=menu
 DOMAIN='' SERVER_IP='' PLATFORM='' DNS_SERVICE='' WEB_SERVICE=''
 DNS_CONF='' ZONE_FILE='' DNS_GROUP='' WEB_CONF='' WEB_LINK=''
@@ -530,6 +542,7 @@ select_platform() {
 detect_platform() {
     [[ -r /etc/os-release ]] || die 'Não encontrei /etc/os-release.'
     # Arquivo fornecido pelo sistema operacional, nunca dados digitados pelo usuário.
+    # shellcheck source=/dev/null
     . /etc/os-release
     if ! select_platform "$ID" "$VERSION_ID"; then
         if [[ $MODE == demo ]]; then
@@ -608,14 +621,21 @@ set_zone_paths() {
     if (( LEGACY_STATE )); then ZONE_FILE=$ZONE_DIR/db.zone; REVERSE_FILE=''; fi
 }
 build_ptr_records() {
-    local i ip name
+    local i j ip name
     PTR_IP=(); PTR_NAME=()
     [[ -n $REVERSE_PREFIX ]] || return 0
     for i in "${!REC_NAME[@]}"; do
         [[ ${REC_TYPE[i]} == A ]] || continue
         ip=${REC_VALUE[i]}
         [[ ${ip%.*} == "$REVERSE_PREFIX" ]] || continue
-        name=${REC_NAME[i]}; [[ $name == @ ]] && name=$DOMAIN || name=$name.$DOMAIN
+        name=${REC_NAME[i]}; if [[ $name == @ ]]; then name=$DOMAIN; else name=$name.$DOMAIN; fi
+        # Um nome principal por IP: o primeiro cadastrado, mas ns1 tem prioridade.
+        for j in "${!PTR_IP[@]}"; do
+            if [[ ${PTR_IP[j]} == "$ip" ]]; then
+                if [[ ${REC_NAME[i]} == ns1 ]]; then PTR_NAME[j]=$name.; fi
+                continue 2
+            fi
+        done
         PTR_IP+=("$ip"); PTR_NAME+=("$name.")
     done
 }
@@ -753,6 +773,29 @@ edit_record() {
         warn 'Edição inválida. O registro anterior foi preservado.'
     fi
 }
+# Lê os registros FINAIS (depois de editar/remover) e avisa quando www não aponta para esta VM.
+www_notice() {
+    local i found=0 apex=0
+    for i in "${!REC_NAME[@]}"; do
+        if [[ ${REC_NAME[i]} == @ && ${REC_TYPE[i]} == A ]]; then apex=1; fi
+        [[ ${REC_NAME[i]} == www ]] || continue
+        found=1
+        [[ ${REC_TYPE[i]} == A && ${REC_VALUE[i]} != "$SERVER_IP" ]] || continue
+        if [[ -n $SECONDARY_IP && ${REC_VALUE[i]} == "$SECONDARY_IP" ]]; then
+            warn "www.$DOMAIN aponta para o secundário (${REC_VALUE[i]}). Execute este assistente também na VM do secundário; sem isso o site e o DNS dele não respondem."
+        else
+            warn "www.$DOMAIN aponta para ${REC_VALUE[i]}, que não é esta VM ($SERVER_IP). O Apache dessa máquina precisa estar instalado e configurado."
+        fi
+    done
+    if (( ! found )); then
+        if (( apex )); then
+            info "Não há registro www: www.$DOMAIN não será resolvido pelo DNS. O site continua acessível pelo IP e por $DOMAIN."
+        else
+            info "Não há registro www nem registro A para $DOMAIN: nenhum desses nomes será resolvido pelo DNS. O site continua acessível pelo IP desta VM."
+        fi
+    fi
+}
+
 wizard() {
     local suggested choice i
     while :; do
@@ -835,7 +878,8 @@ wizard() {
         ui_detail 'Serial' 'AAAAMMDDnn'
         if [[ $DNS_ROLE == primary ]]; then
             show_records
-            info 'PTRs serão criados para cada registro A dentro da rede /24 escolhida; CNAME não recebe PTR.'
+            info 'Um PTR por IP dentro da rede /24 escolhida (ns1 tem prioridade no IP do primário); CNAME não recebe PTR.'
+            www_notice
             for i in "${!REC_NAME[@]}"; do
                 if [[ ${REC_TYPE[i]} == A && ${REC_VALUE[i]%.*} != "$REVERSE_PREFIX" ]]; then
                     warn "${REC_NAME[i]} (${REC_VALUE[i]}) está fora de $REVERSE_NETWORK e não receberá PTR nesta zona."
@@ -843,7 +887,7 @@ wizard() {
             done
         else info 'As zonas direta e reversa serão recebidas do primário. Ele deve autorizar o IP desta VM.'; fi
         ui_group 'O QUE SERÁ APLICADO'
-        info 'Instalar: BIND e Apache; baixar: template Bare / Start Bootstrap (licença MIT).'
+        info 'Instalar: BIND e Apache; template Bare / Start Bootstrap (MIT), conferido por SHA-256. Se o download falhar, usa a cópia local em template/.'
         warn 'A configuração principal do BIND será substituída; o Apache servirá este site como padrão.'
         info 'Arquivos alterados terão backup. Pacotes instalados permanecem se houver falha.'
         [[ $PLATFORM != debian ]] || info 'APT: fontes de CD/DVD serão desativadas; se faltar fonte online, adicionar repositórios oficiais com backup.'
@@ -1099,16 +1143,49 @@ cleanup() {
 }
 
 # Template fixado em um commit: atualizações do autor não mudam o conteúdo silenciosamente.
-download_template() {
-    local base=https://raw.githubusercontent.com/StartBootstrap/startbootstrap-bare/a9b948d6138fd3fbfaa6a26908ffbd47c50f9881 file
-    install -d "$WORK/site/css" "$WORK/site/js" "$WORK/site/assets"
+# Baixa o template sem encerrar o script: quem decide o que fazer com a falha é download_template.
+fetch_template() {
+    local base=$1 file out=${LOG:-/dev/null}
+    local -a opts=(--fail --location --silent --show-error --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 90 --retry 2)
     for file in index.html css/styles.css js/scripts.js assets/favicon.ico; do
-        run "Baixando template: $file" curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 90 --retry 2 "$base/dist/$file" -o "$WORK/site/$file"
-        [[ -s $WORK/site/$file ]] || die "Download vazio: $file."
+        curl "${opts[@]}" "$base/dist/$file" -o "$WORK/site/$file" >>"$out" 2>&1 || return 1
     done
-    run 'Baixando licença do template' curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 90 --retry 2 "$base/LICENSE" -o "$WORK/site/LICENSE"
-    run 'Baixando JavaScript do Bootstrap para acesso local' curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 90 --retry 2 'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js' -o "$WORK/site/js/bootstrap.bundle.min.js"
-    grep -qi '<!doctype html>' "$WORK/site/index.html" || die 'O arquivo baixado não parece ser o template HTML.'
+    curl "${opts[@]}" "$base/LICENSE" -o "$WORK/site/LICENSE" >>"$out" 2>&1 || return 1
+    curl "${opts[@]}" 'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js' -o "$WORK/site/js/bootstrap.bundle.min.js" >>"$out" 2>&1 || return 1
+}
+# Confere os SHA-256 conhecidos. Arquivo ausente, alterado ou ilegível = falha.
+verify_template() {
+    local dir=$1
+    [[ -d $dir ]] || return 1
+    ( cd -- "$dir" && printf '%s\n' "${TEMPLATE_SHA256[@]}" | sha256sum --check --strict --quiet - ) >>"${LOG:-/dev/null}" 2>&1
+}
+# Copia SOMENTE os arquivos listados (e já verificados): nada extra da pasta entra no site.
+use_local_template() {
+    local entry file
+    verify_template "$TEMPLATE_DIR" || return 1
+    for entry in "${TEMPLATE_SHA256[@]}"; do
+        file=${entry#*  }
+        install -D -m 644 "$TEMPLATE_DIR/$file" "$WORK/site/$file" || return 1
+    done
+}
+download_template() {
+    local base=https://raw.githubusercontent.com/StartBootstrap/startbootstrap-bare/a9b948d6138fd3fbfaa6a26908ffbd47c50f9881
+    install -d "$WORK/site/css" "$WORK/site/js" "$WORK/site/assets"
+    info 'Baixando o template (Bare / Start Bootstrap, versão fixada) e conferindo os SHA-256'
+    if fetch_template "$base" && verify_template "$WORK/site"; then
+        TEMPLATE_SOURCE=internet
+        ok 'Template baixado e verificado por SHA-256.'
+    else
+        warn 'Download do template falhou ou não bate com os SHA-256 conhecidos. Tentando a cópia local.'
+        rm -rf -- "$WORK/site"; install -d "$WORK/site/css" "$WORK/site/js" "$WORK/site/assets"
+        if use_local_template; then
+            TEMPLATE_SOURCE=local
+            ok "USANDO A CÓPIA LOCAL do template, verificada por SHA-256: $TEMPLATE_DIR"
+        else
+            die "Sem template válido: o download falhou e a cópia local ($TEMPLATE_DIR) está ausente ou alterada. Mantenha a pasta template/ ao lado do script."
+        fi
+    fi
+    grep -qi '<!doctype html>' "$WORK/site/index.html" || die 'O arquivo do template não parece ser HTML.'
     sed -i "s|https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js|js/bootstrap.bundle.min.js|;s|A Bootstrap 5 Starter Template|GS Linux: $DOMAIN|;s|A complete project boilerplate built with Bootstrap|Servidor DNS e Apache configurados|" "$WORK/site/index.html"
     printf '%s\n' "$DOMAIN" >"$WORK/site/gs-health.txt"
 }
@@ -1737,7 +1814,7 @@ main() {
         info "Primário pronto. Configure a segunda VM ($SECONDARY_IP) no modo Secundário, usando o mesmo domínio e rede /24."
         info 'A transferência entre as VMs será comprovada pelo painel 5 depois que ambas estiverem prontas.'
     fi
-    info "Backup: $BACKUP | Log: $LOG"
+    info "Backup: $BACKUP | Log: $LOG | Template: ${TEMPLATE_SOURCE:-não instalado} (SHA-256 conferido)"
     info 'Para testar novamente: sudo bash gs-linux.sh --check'
 }
 

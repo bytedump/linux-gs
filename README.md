@@ -2,11 +2,32 @@
 
 Um único script Bash para **Debian e Rocky Linux**, com menus em português, cores,
 banner ASCII, validação das respostas e confirmação antes de alterar a máquina.
-Instala BIND e Apache e publica um template HTML baixado da Internet.
+Instala BIND e Apache e publica um template HTML (baixado e verificado por SHA-256, com cópia local de reserva).
 
-**Versão 1.2:** perfil das atividades DNS Primary/Secondary: domínio `nome.fiap`,
+**Versão 1.2.3:** perfil das atividades DNS Primary/Secondary: domínio `nome.fiap`,
 `www` como A, `intranet` como CNAME, zona reversa /24 com PTR e transferência para
 uma segunda VM. [Passo a passo das duas VMs e demonstração](docs/atividade-dns.md).
+
+## Rocky sem interface gráfica: como levar o script para a VM
+
+**Não precisa instalar Firefox.** No terminal do seu **clone linkado Rocky**, com
+Internet e uma conta com `sudo`, execute uma linha por vez. Se alguma falhar, pare
+e consulte o tutorial abaixo antes de continuar:
+
+```bash
+sudo dnf install -y git
+cd ~
+git clone https://github.com/bytedump/linux-gs.git
+cd linux-gs
+bash gs-linux.sh --demo
+```
+
+O Git baixa **a pasta inteira**, incluindo `template/`. `--demo` serve para treinar;
+para instalar de verdade, já dentro dessa pasta, use `sudo bash gs-linux.sh --install`.
+Se entrou como `root`, retire `sudo` dos comandos.
+
+**[Tutorial completo: clone linkado, rede, download pelo terminal e transferência
+pelo Windows se o GitHub não abrir na VM](docs/colocar-na-vm.md).**
 
 ## Menu principal: aprender, treinar e comprovar
 
@@ -122,7 +143,20 @@ não são apagados. Use a VM de exercícios, não um servidor com serviços de t
 O template é **Bare, do Start Bootstrap**, licença MIT, fixado em um commit. HTML,
 CSS, JavaScript, favicon e licença são baixados; o JavaScript do Bootstrap também
 fica local. Depois da instalação, a página não depende de uma CDN para funcionar.
-Não há pacote ZIP para extrair nem script externo baixado para executar.
+O download do template usa arquivos individuais; nenhum instalador externo é executado.
+
+**Template verificado e cópia local.** O script traz os **SHA-256** dos seis arquivos do
+template e confere tudo o que baixa. Se o download falhar, ou se um arquivo não bater com
+o hash, ele avisa e usa a **cópia local** da pasta `template/`, que fica ao lado do
+`gs-linux.sh` e passa pela mesma verificação. Só os arquivos listados são publicados; um
+arquivo extra na pasta é ignorado. Sem a pasta e sem Internet, a instalação é interrompida.
+**Leve a pasta `template/` junto com o script**: copiar só o `.sh` ainda funciona, mas
+sem plano B para o template. Isso **não** torna a instalação offline: BIND e Apache
+continuam sendo instalados pelos repositórios online. No Debian, o script desativa fontes
+`cdrom:` e exige que a atualização dos repositórios funcione; uma instalação completamente
+offline não é suportada.
+Para atualizar a cópia, baixe os mesmos arquivos da versão fixada e atualize os hashes
+na lista `TEMPLATE_SHA256`, no início do script.
 
 ## O que responder nos menus
 
@@ -168,9 +202,10 @@ devem estar na própria zona e ter um A; aliases externos e cadeias de CNAME nã
 aceitos. Isso evita loops e destinos sem resolução durante o exercício.
 MX não instala e-mail. Prioridade menor significa preferência maior.
 TXT aceita até 200 caracteres ASCII visíveis, incluindo espaços e aspas.
-Os **PTRs são automáticos** para cada A dentro da rede /24 selecionada. Se vários
-nomes compartilham um IP, a consulta reversa pode retornar vários PTRs. CNAME não
-ganha PTR próprio. Um A externo, como `webmail → 10.200.200.200`, não entra na zona
+Os **PTRs são automáticos**: um por IP dentro da rede /24 selecionada. Se vários nomes
+compartilham um IP, vale o primeiro cadastrado, e `ns1` tem prioridade (no primário, `10 IN
+PTR ns1.<dominio>.`). Vários PTRs para um IP seriam válidos, mas um nome principal é mais
+fácil de explicar. CNAME não ganha PTR próprio. Um A externo, como `webmail → 10.200.200.200`, não entra na zona
 reversa de `192.168.56.0/24`.
 
 SOA usa os valores da atividade: refresh `28800`, retry `14400`, expire `86400` e
@@ -355,6 +390,7 @@ bash tests/unit.sh
 bash tests/learning-status.sh
 bash tests/apt-sources.sh  # requer apt-get; não usa rede nem altera /etc
 bash tests/dns-lab.sh
+bash tests/template.sh   # template/hashes/cópia local e PTR único; sem rede
 ```
 
 Os testes locais cobrem entrada inválida, conflitos entre registros, escape de TXT,
