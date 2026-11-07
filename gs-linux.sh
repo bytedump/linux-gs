@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.2.3
+VERSION=1.2.4
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd) || SCRIPT_DIR=.
 # Cópia local do template (pasta ao lado do script) e hashes conhecidos dos arquivos.
 # Os hashes ficam AQUI, dentro do .sh: valem tanto para o download quanto para a cópia local.
@@ -1753,7 +1753,21 @@ export_report() {
 # Se alterar novos arquivos, inclua backup_path ANTES da primeira alteração.
 extra_tasks() { :; }
 
+# No Debian, su sem "-" pode manter o PATH do usuário, sem os diretórios sbin.
+# a2ensite, apache2ctl e ferramentas de firewall podem estar instalados e invisíveis.
+# Preserve as entradas existentes e exporte o complemento também para os subprocessos.
+ensure_admin_path() {
+    local directory
+    for directory in /usr/local/sbin /usr/sbin /sbin; do
+        if [[ :${PATH:-}: != *":$directory:"* ]]; then
+            PATH=${PATH:+$PATH:}$directory
+        fi
+    done
+    export PATH
+}
+
 main() {
+    ensure_admin_path
     case ${1:-} in
         --demo) MODE=demo ;; --check) MODE=check ;; --install) MODE=install ;;
         --learn) MODE=learn ;; --tutor) MODE=tutor ;; --status) MODE=status ;; --report) MODE=report ;;

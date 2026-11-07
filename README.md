@@ -4,7 +4,7 @@ Um único script Bash para **Debian e Rocky Linux**, com menus em português, co
 banner ASCII, validação das respostas e confirmação antes de alterar a máquina.
 Instala BIND e Apache e publica um template HTML (baixado e verificado por SHA-256, com cópia local de reserva).
 
-**Versão 1.2.3:** perfil das atividades DNS Primary/Secondary: domínio `nome.fiap`,
+**Versão 1.2.4:** perfil das atividades DNS Primary/Secondary: domínio `nome.fiap`,
 `www` como A, `intranet` como CNAME, zona reversa /24 com PTR e transferência para
 uma segunda VM. [Passo a passo das duas VMs e demonstração](docs/atividade-dns.md).
 
@@ -106,6 +106,12 @@ sudo bash gs-linux.sh --install
 Ou abra `sudo bash gs-linux.sh` e escolha **4**. Se estiver conectado como `root`,
 use `bash gs-linux.sh --install`. Se não tem `sudo` nem
 acesso a root, precisará da conta administrativa fornecida pelo professor.
+
+Desde a **1.2.4**, o assistente completa o caminho dos comandos administrativos
+(`PATH`) ao iniciar. Isso evita `a2ensite: command not found` no Debian quando o
+Apache está instalado, mas a sessão aberta com `su` não inclui `/usr/sbin`.
+O ajuste também vale para o painel e não altera os arquivos de perfil do usuário.
+Para uma sessão administrativa nova, prefira `su -` e depois volte à pasta do projeto.
 
 O instalador vai:
 
@@ -405,6 +411,8 @@ compatibilidade do estado antigo e preferência pela interface Host-Only.
 `tests/integration.sh` exige um **contêiner descartável**, root, checkout montado
 em `/repo` e `GS_DISPOSABLE_CONTAINER=yes`. Ele instala pacotes e inicia BIND/Apache
 reais; não o execute na sua VM de trabalho. Mantém TLS e assinaturas dos pacotes.
+Começa com `PATH=/usr/bin:/bin` e passa pela entrada do assistente para reproduzir
+uma sessão sem os diretórios administrativos, como `su` sem login no Debian.
 
 `tests/dns-transfer.sh` usa **dois contêineres descartáveis**, na mesma rede /24,
 com BIND, Apache, curl, iproute2 e dnsutils instalados, o repositório em `/repo`
@@ -442,6 +450,8 @@ Validação realizada nesta entrega:
   direta/reversa, AXFR permitido somente ao secundário, atualização de A/PTR após
   aumento do serial e cabeçalho Apache sem versão. O painel conferiu os registros
   transferidos, incluindo o novo `webmail`.
+  Na 1.2.4, a integração completa foi repetida com PATH inicial sem `/usr/sbin`:
+  ativação do site por `a2ensite`, BIND/Apache reais, reaplicação e painel passaram.
 - Debian 11 e Rocky 8/10: caminhos e seleção de plataforma cobertos pelos testes;
   instalação completa ainda não executada nessas versões.
 - Os contêineres não validam boot com systemd, SELinux enforcing nem tráfego de

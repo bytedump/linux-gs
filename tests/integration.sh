@@ -7,6 +7,10 @@ set -Eeuo pipefail
 }
 cd /repo
 source ./gs-linux.sh
+# Reproduz su sem login: os pacotes existem, mas a2ensite/apache2ctl não estão
+# no PATH inicial. Use a entrada real do assistente para preparar também os filhos.
+PATH=/usr/bin:/bin
+main --help >/dev/null
 detect_platform
 WORK=$(mktemp -d)
 LOG=$WORK/install.log

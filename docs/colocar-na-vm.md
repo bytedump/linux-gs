@@ -255,6 +255,7 @@ desligar o clone. Não é necessário deixá-la para o instalador DNS/Web funcio
 | Erro ao acessar repositórios no `dnf` | NAT, rota e DNS; se a rede da faculdade exige proxy, use os dados fornecidos por ela. O ZIP não substitui esses pacotes. |
 | `SSL certificate problem` | Confira `date` e os certificados da faculdade. Não desative a verificação TLS para contornar o erro. |
 | `No such file or directory` ao executar | Use `pwd` e `ls`: você precisa estar na pasta que contém `gs-linux.sh`. |
+| Debian: `a2ensite: command not found`, mesmo com Apache instalado | Atualize para 1.2.4 ou posterior. Nas versões anteriores, já como root, execute `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` e rode o assistente novamente. Se continuar, confira `ls -l /usr/sbin/a2ensite`: arquivo ausente indica outro problema na instalação do Apache. |
 | SCP: `Connection refused` ou demora até falhar | Clone ligado, regra NAT correta, porta `2222`, `sshd` ativo e SSH permitido na zona certa do firewall. |
 | SCP: `Permission denied` | Login e senha da VM, não do GitHub; confira a conta fornecida pelo professor. |
 | Não consigo colar no console do VirtualBox | O console de texto pode não ter área de transferência integrada. Digite as linhas; com SSH configurado, `ssh -p 2222 usuario@127.0.0.1` no PowerShell abre um terminal em que você pode colar. |
