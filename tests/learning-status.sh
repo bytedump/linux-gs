@@ -18,7 +18,7 @@ done
 printf 'O professor pediu DHCP\ns\n1\ns\n\n0\n' | bash gs-linux.sh --tutor >"$test_dir/tutor"
 check 'Orientador identifica DHCP' grep -Fq 'Assunto sugerido: DHCP' "$test_dir/tutor"
 check 'Orientador faz pergunta adicional' grep -Fq 'distribuir IPs automaticamente' "$test_dir/tutor"
-check 'Não afirma ter instalado DHCP' grep -Fq 'DHCP ainda exige implementação' "$test_dir/tutor"
+check 'Não afirma ter instalado DHCP' grep -Fq 'Este orientador não instala DHCP' "$test_dir/tutor"
 printf 'Não sei qual assunto\nn\n2\n\n0\n0\n' | bash gs-linux.sh --tutor >"$test_dir/unknown"
 check 'Assunto não reconhecido permite escolher no guia' grep -Fq 'Registros DNS — qual deles usar?' "$test_dir/unknown"
 # shellcheck disable=SC2016 # Deve ser texto literal para provar que não é executado.

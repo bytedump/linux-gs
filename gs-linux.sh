@@ -115,6 +115,8 @@ Uso:
   sudo bash gs-linux.sh --status Mostra evidências reais de DNS, Web e sistema.
   sudo bash gs-linux.sh --report Salva essas evidências em um arquivo de texto.
   sudo bash gs-linux.sh --check  Testa a instalação já realizada.
+  sudo bash gs-linux.sh --dhcp  Abre somente o menu DHCP.
+  sudo bash gs-linux.sh --network Abre o submenu DNS/Web e DHCP.
   bash gs-linux.sh --help        Mostra esta ajuda.
 
 Compatibilidade prevista: Debian 11/12/13 e Rocky Linux 8/9/10, com systemd.
@@ -301,7 +303,7 @@ COMO COMPROVAR:
   No servidor, mostre a concessão e o log do serviço, além da porta UDP/67.
   Ver apenas um processo ativo não prova que o cliente recebeu uma concessão.
 
-ESTADO DESTE PROJETO: DHCP ainda não está implementado. Este guia não o instala.
+DHCP possui menu separado: sudo bash gs-linux.sh --dhcp. Este guia não o instala.
 Ative um DHCP apenas na rede isolada autorizada pelo professor: um segundo servidor
 na rede errada pode entregar endereços incorretos a outros computadores.
 EOF
@@ -374,7 +376,7 @@ DNS secundário                Papel 2 na segunda VM                SOAs iguais 
 Backup agendado                 Script de backup + cron/timer        Arquivo gerado + restauração
 Usuários/permissões             id, grupos, ls -l; menor privilégio   Teste como aquele usuário
 
-DHCP, outro site, backup agendado e gestão de usuários exigem implementação adicional.
+DHCP tem menu próprio; outro site, backup agendado e gestão de usuários exigem implementação adicional.
 Para qualquer tarefa: anote o pedido → planeje → faça backup → altere → valide → teste.
 Leia extra_tasks no código: é o ponto reservado às chamadas das funções da prova.
 Não use chmod 777 como solução geral e não teste restauração por cima da única cópia.
@@ -446,8 +448,8 @@ tutor_menu() {
                     ask 'O pedido exige distribuir IPs automaticamente aos clientes? (S/N)' S
                     if [[ ${REPLY,,} == s || ${REPLY,,} == sim ]]; then
                         info 'Anote: implementação exigida, interface isolada, rede/máscara, faixa, gateway, DNS e tempo de concessão.'
-                        info 'Crie uma função específica em extra_tasks; valide a configuração antes de iniciar o serviço.'
-                        warn 'DHCP ainda exige implementação. Este orientador não cria um servidor DHCP.'
+                        info 'Abra sudo bash gs-linux.sh --dhcp para configurar o módulo independente.'
+                        warn 'Este orientador não instala DHCP; use o menu separado e valide nos clientes.'
                     else explain 'Se for só escolher um IP fixo ou resolver nomes, consulte IP/rede ou DNS no guia.'; fi
                 elif [[ $topic == records || $topic == dns ]]; then
                     info 'Use a instalação para definir a lista completa dos registros. Reaplicar substitui a lista anterior.'
@@ -471,6 +473,37 @@ tutor_menu() {
         pause_reading
     done
 }
+# Executa módulos em outro Bash: traps, opções e variáveis não vazam para o menu.
+run_lab_module() {
+    local module=$1 result=0
+    shift
+    if [[ ! -r "$SCRIPT_DIR/$module" ]]; then
+        warn "Módulo ausente: $module. Baixe a pasta completa da branch."
+        return 0
+    fi
+    bash "$SCRIPT_DIR/$module" "$@" || result=$?
+    if (( result != 0 )); then
+        warn "O módulo $module terminou com erro (código $result). Retornando ao menu."
+    fi
+    return 0
+}
+network_menu() {
+    while :; do
+        heading 'DNS / WEB E DHCP — MÓDULOS INDEPENDENTES'
+        menu_item 1 'DNS + Apache: instalar/configurar'
+        menu_item 2 'DNS + Apache: comprovar'
+        menu_item 3 'DHCP: abrir menu exclusivo'
+        menu_item 0 'Voltar'
+        ask 'Escolha uma opção' 0
+        case $REPLY in
+            1) run_lab_module gs-linux.sh --install ;;
+            2) run_lab_module gs-linux.sh --status ;;
+            3) run_lab_module dhcp-linux.sh ;;
+            0) return ;;
+            *) warn 'Escolha uma opção de 0 a 3.' ;;
+        esac
+    done
+}
 home_menu() {
     while :; do
         heading 'O QUE VOCÊ QUER FAZER?'
@@ -480,6 +513,7 @@ home_menu() {
         menu_item 3 'Treinar a instalação (demonstração, sem alterações)'
         ui_group 'CONFIGURE SUA VM'
         menu_item 4 'Instalar/configurar DNS + Web nesta VM'
+        menu_item 7 'Submenu DNS + Web / DHCP (independentes)'
         ui_group 'MOSTRE O RESULTADO'
         menu_item 5 'Comprovar: serviços, portas, DNS, Web e firewall'
         menu_item 6 'Salvar relatório de comprovação em texto'
@@ -488,8 +522,8 @@ home_menu() {
         ask 'Escolha uma opção' 0
         case $REPLY in
             1) learning_menu ;; 2) tutor_menu ;; 3) MODE=demo; return ;; 4) MODE=install; return ;;
-            5) MODE=status; return ;; 6) MODE=report; return ;; 0) MODE='exit'; return ;;
-            *) warn 'Escolha uma opção de 0 a 6.' ;;
+            5) MODE=status; return ;; 6) MODE=report; return ;; 7) network_menu ;; 0) MODE='exit'; return ;;
+            *) warn 'Escolha uma opção de 0 a 7.' ;;
         esac
     done
 }
@@ -1769,6 +1803,7 @@ ensure_admin_path() {
 main() {
     ensure_admin_path
     case ${1:-} in
+        --dhcp) MODE=dhcp ;; --network) MODE=network ;;
         --demo) MODE=demo ;; --check) MODE=check ;; --install) MODE=install ;;
         --learn) MODE=learn ;; --tutor) MODE=tutor ;; --status) MODE=status ;; --report) MODE=report ;;
         --help|-h) help_text; return ;;
@@ -1777,7 +1812,7 @@ main() {
     (( $# <= 1 )) || die 'Use apenas uma opção por vez.'
     colors; banner
     if [[ $MODE == menu ]]; then home_menu; fi
-    case $MODE in exit) return ;; learn) learning_menu; return ;; tutor) tutor_menu; return ;; esac
+    case $MODE in dhcp) run_lab_module dhcp-linux.sh; return ;; network) network_menu; return ;; exit) return ;; learn) learning_menu; return ;; tutor) tutor_menu; return ;; esac
     detect_platform
     case $MODE in status) evidence_panel; return ;; report) export_report; return ;; esac
     if [[ $MODE == demo ]]; then

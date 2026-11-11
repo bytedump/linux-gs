@@ -459,3 +459,11 @@ Validação realizada nesta entrega:
 
 Cores aparecem automaticamente em terminal compatível. Para desativar:
 `NO_COLOR=1 bash gs-linux.sh --demo`. Saída redirecionada para arquivo já sai sem cores.
+
+## Branch com módulo DHCP independente
+
+`sudo bash gs-linux.sh` → **7 — Submenu DNS + Web / DHCP**.
+DNS/Apache conserva o instalador original; DHCP abre seu próprio menu em processo separado.
+Também disponíveis: `sudo bash gs-linux.sh --network` e `sudo bash gs-linux.sh --dhcp`.
+Erros do módulo retornam ao submenu. O comando `--install` continua instalando somente DNS/Apache.
+Consulte [preparação e limites do DHCP](docs/dhcp.md) e [conteúdos restantes dos slides](docs/conteudos-pendentes.md).
