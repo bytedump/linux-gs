@@ -36,3 +36,7 @@ Sintaxe Bash e testes/prova.sh (arquivo tests/prova.sh) validam os arquivos DNS/
 ## Correção 1.2.6: Apache preconfigurado na porta 81
 
 O Rocky do laboratório apresentou `Server configured, listening on: port 81`. O perfil GS agora guarda backup das diretivas Listen nos arquivos padrão `/etc/httpd/conf/httpd.conf` e `/etc/httpd/conf.d/*.conf`, remove essas declarações e centraliza `Listen 80` no site gerenciado. O VirtualHost sozinho não muda a porta de escuta. A validação Apache permanece obrigatória e o rollback restaura os arquivos alterados. O teste de regressão reproduz Listen 81 e verifica a declaração única 80 e backups restauráveis. O PDF/DOCX modificado foi regenerado.
+
+## Perfil 1.2.7: AlmaLinux
+
+O script específico gs-prova.sh também aceita AlmaLinux 8–10, usando dnf, NetworkManager, named e httpd com os caminhos da família Rocky/RHEL. O instalador original gs-linux.sh permanece intacto. Seleção de plataforma e testes locais passaram; instalação real no AlmaLinux ainda requer validação na VM de Produção. PDFs/DOCX foram regenerados.

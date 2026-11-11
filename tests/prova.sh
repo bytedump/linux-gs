@@ -62,3 +62,11 @@ for file in "${SAVED_PATHS[@]}"; do cp -a "$BACKUP/files$file" "$file"; done
 cmp "$scratch/original-main" "$scratch/httpd/conf/httpd.conf"
 cmp "$scratch/original-extra" "$scratch/httpd/conf.d/old.conf"
 echo 'Regressão Listen 81: porta 80 única e backups restauráveis passaram.'
+for distro in rocky almalinux; do
+ for version in 8 9 10; do
+  select_platform "$distro" "$version"
+  [[ $PLATFORM == rocky && $DNS_SERVICE == named && $WEB_SERVICE == httpd && $DNS_CONF == /etc/named.conf ]]
+ done
+done
+! select_platform almalinux 7
+echo 'Seleção Rocky/AlmaLinux 8–10 e rejeição de versão não suportada passaram.'

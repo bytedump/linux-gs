@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.2.6-GS
+VERSION=1.2.7-GS
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd) || SCRIPT_DIR=.
 # Cópia local do template (pasta ao lado do script) e hashes conhecidos dos arquivos.
 # Os hashes ficam AQUI, dentro do .sh: valem tanto para o download quanto para a cópia local.
@@ -532,7 +532,7 @@ select_platform() {
             DNS_CONF=/etc/bind/named.conf; ZONE_FILE=/var/lib/bind/gs-linux/db.zone
             WEB_CONF=/etc/apache2/sites-available/000-000-gs-linux.conf
             WEB_LINK=/etc/apache2/sites-enabled/000-000-gs-linux.conf ;;
-        rocky:8|rocky:9|rocky:10)
+        rocky:8|rocky:9|rocky:10|almalinux:8|almalinux:9|almalinux:10)
             PLATFORM=rocky; DNS_SERVICE=named; WEB_SERVICE=httpd; DNS_GROUP=named
             DNS_CONF=/etc/named.conf; ZONE_FILE=/var/named/gs-linux/db.zone
             WEB_CONF=/etc/httpd/conf.d/00-gs-linux.conf; WEB_LINK='' ;;
@@ -1948,14 +1948,14 @@ exam_entry() {
         --exam)
             [[ $EUID == 0 ]] || die 'Execute com sudo.'
             source /etc/os-release
-            [[ $ID == rocky && ${VERSION_ID%%.*} =~ ^(8|9|10)$ ]] || die 'Este perfil da prova exige Rocky 8, 9 ou 10.'
+            [[ ( $ID == rocky || $ID == almalinux ) && ${VERSION_ID%%.*} =~ ^(8|9|10)$ ]] || die 'Este perfil da prova exige Rocky ou AlmaLinux 8, 9 ou 10.'
             command -v nmcli >/dev/null || die 'NetworkManager não disponível.'
             main --install
             EXAM_NETWORK_PENDING=0
             info 'SUCESSO: IP fixo, DNS, HTTP, template, segurança e boot verificados. Reiniciando.'
             systemctl reboot ;;
         --status) main --status ;;
-        *) printf 'GS Rocky: sudo bash gs-prova.sh --prepare (salvar dados)\nDepois: sudo bash gs-prova.sh --exam (automático, reinicia após sucesso)\nApós boot: sudo bash gs-prova.sh --status\n' ;;
+        *) printf 'GS Rocky/AlmaLinux: sudo bash gs-prova.sh --prepare (salvar dados)\nDepois: sudo bash gs-prova.sh --exam (automático, reinicia após sucesso)\nApós boot: sudo bash gs-prova.sh --status\n' ;;
     esac
 }
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then exam_entry "$@"; fi
