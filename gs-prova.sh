@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 umask 022
 
-VERSION=1.2.5-GS
+VERSION=1.2.6-GS
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd) || SCRIPT_DIR=.
 # Cópia local do template (pasta ao lado do script) e hashes conhecidos dos arquivos.
 # Os hashes ficam AQUI, dentro do .sh: valem tanto para o download quanto para a cópia local.
@@ -1270,6 +1270,7 @@ EOF
 render_web() {
     cat >"$1" <<EOF
 # GS Linux: arquivo ordenado antes dos outros sites para ser o padrão.
+Listen 80
 ServerName $DOMAIN
 ServerTokens Prod
 ServerSignature Off
@@ -1286,7 +1287,25 @@ ServerSignature Off
 </VirtualHost>
 EOF
 }
+# A VM do laboratório pode vir com Listen 81. VirtualHost *:80 sozinho
+# não abre a porta: centralizamos Listen 80 no arquivo gerenciado.
+exam_normalize_http_listeners() {
+    local root=${1:-/etc/httpd} file
+    local -a files=()
+    for file in "$root/conf/httpd.conf" "$root"/conf.d/*.conf; do
+        [[ -f $file && $file != "$WEB_CONF" ]] || continue
+        if grep -Eq '^[[:space:]]*Listen[[:space:]]+' "$file"; then
+            backup_path "$file"
+            files+=("$file")
+        fi
+    done
+    for file in "${files[@]}"; do
+        sed -i -E '/^[[:space:]]*Listen[[:space:]]+/d' "$file"
+    done
+    info 'Apache: Listen 80 será definido no site gerenciado; diretivas anteriores foram guardadas no backup.'
+}
 apply_configuration() {
+    exam_normalize_http_listeners
     local serial previous=0 candidate file
     if [[ $DNS_ROLE == primary ]]; then
         for file in "$ZONE_FILE" "$REVERSE_FILE" "$ZONE_DIR/db.zone"; do

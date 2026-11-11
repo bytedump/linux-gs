@@ -44,3 +44,21 @@ for failure in version transfer boot dynamic local; do
  ! grep -q REBOOT_ALLOWED "$scratch/out"
 done
 echo 'GS: configuração DNS/Web e bloqueio de conclusão em 5 falhas passaram.'
+# Reproduz a VM fornecida: Listen 81 no arquivo principal e outro Listen
+# em conf.d. Garante uma única declaração 80 e restauração dos originais.
+mkdir -p "$scratch/httpd/conf" "$scratch/httpd/conf.d"
+printf 'Listen 81\nServerRoot /etc/httpd\n' > "$scratch/httpd/conf/httpd.conf"
+printf '# configuração preexistente\nListen 127.0.0.1:8080\n' > "$scratch/httpd/conf.d/old.conf"
+cp "$scratch/httpd/conf/httpd.conf" "$scratch/original-main"
+cp "$scratch/httpd/conf.d/old.conf" "$scratch/original-extra"
+BACKUP=$scratch/backup; mkdir -p "$BACKUP"
+SAVED_PATHS=(); SAVED_EXISTS=()
+WEB_CONF=$scratch/httpd/conf.d/00-gs-linux.conf
+exam_normalize_http_listeners "$scratch/httpd"
+render_web "$WEB_CONF"
+[[ $(grep -RhEc '^[[:space:]]*Listen[[:space:]]+' "$scratch/httpd" | awk '{s+=$1}END{print s}') == 1 ]]
+grep -Fxq 'Listen 80' "$WEB_CONF"
+for file in "${SAVED_PATHS[@]}"; do cp -a "$BACKUP/files$file" "$file"; done
+cmp "$scratch/original-main" "$scratch/httpd/conf/httpd.conf"
+cmp "$scratch/original-extra" "$scratch/httpd/conf.d/old.conf"
+echo 'Regressão Listen 81: porta 80 única e backups restauráveis passaram.'

@@ -32,3 +32,7 @@ Entregas em entrega/: PDF e Word do script original e do modificado; Word com ma
 ## Validação e limites
 
 Sintaxe Bash e testes/prova.sh (arquivo tests/prova.sh) validam os arquivos DNS/HTTP e a detecção de falhas simuladas: versão HTTP exposta, AXFR liberado, boot desabilitado, IP dinâmico e template local. Os 186 testes anteriores verificam o instalador original. A instalação Rocky real, NetworkManager, firewall, reinício e acesso do Windows precisam ser comprovados na VM Homologação. Não se declarou essa execução como validada neste ambiente.
+
+## Correção 1.2.6: Apache preconfigurado na porta 81
+
+O Rocky do laboratório apresentou `Server configured, listening on: port 81`. O perfil GS agora guarda backup das diretivas Listen nos arquivos padrão `/etc/httpd/conf/httpd.conf` e `/etc/httpd/conf.d/*.conf`, remove essas declarações e centraliza `Listen 80` no site gerenciado. O VirtualHost sozinho não muda a porta de escuta. A validação Apache permanece obrigatória e o rollback restaura os arquivos alterados. O teste de regressão reproduz Listen 81 e verifica a declaração única 80 e backups restauráveis. O PDF/DOCX modificado foi regenerado.
